@@ -197,7 +197,9 @@ export class WebhookHandler {
       // 处理后的视频文件，可能被上传、非弹幕上传、同步
       if (syncConfig?.targetFiles.includes("danmaku")) {
         const shouldRemove = config.afterConvertRemoveVideoRaw;
-        this.fileRefManager.addRef(filePath, shouldRemove);
+        if (filePath.includes("后处理") || filePath.includes("弹幕版")) {
+          this.fileRefManager.addRef(filePath, shouldRemove);
+        }
       }
       if (config.uid) {
         const shouldRemove =
@@ -1076,6 +1078,7 @@ export class WebhookHandler {
     }
 
     // 处理转载来源：当设置为转载类型且转载来源为空时，自动生成直播间链接
+    // TODO: 考虑迁移到上传预设配置实现，需要将metadata参数传递到上传函数中
     if (
       uploadPreset.copyright === 2 &&
       (!uploadPreset.source || uploadPreset.source.trim() === "")
@@ -1169,7 +1172,7 @@ export class WebhookHandler {
         title: item.title,
       })),
       limitedUploadTime,
-      type === "raw" ? "none" : config.afterUploadDeletAction,
+      config.afterUploadDeletAction,
     );
 
     live.batchUpdateUploadStatus(
@@ -1211,7 +1214,7 @@ export class WebhookHandler {
       })),
       uploadPreset,
       limitedUploadTime,
-      type === "raw" ? "none" : config.afterUploadDeletAction,
+      config.afterUploadDeletAction,
     )) as number;
 
     live[aidField] = Number(aid);

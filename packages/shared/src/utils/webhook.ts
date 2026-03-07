@@ -1,5 +1,6 @@
 import ejs from "ejs";
 import log from "./log.js";
+import type { PartTitleFormatOptions } from "@biliLive-tools/types";
 
 /**
  * 支持{{title}},{{user}},{{now}}等占位符，会覆盖预设中的标题，如【{{user}}】{{title}}-{{now}}<br/>
@@ -88,17 +89,7 @@ export function formatTitle(
  * @param {string} options.filename 文件名
  * @param {string} template 格式化模板
  */
-export function formatPartTitle(
-  options: {
-    title: string;
-    username: string;
-    time: string;
-    roomId: string | number;
-    filename: string;
-    index: number;
-  },
-  template: string,
-) {
+export function formatPartTitle(options: PartTitleFormatOptions, template: string) {
   const { year, month, day, hours, minutes, seconds } = formatTime(options.time);
   let renderText = template;
   const isDanmaFile = options.filename.includes("-弹幕版");
@@ -135,6 +126,24 @@ export function formatPartTitle(
     .slice(0, 80);
 
   return title;
+}
+
+/**
+ * 根据平台和房间号构建直播间链接
+ * @param platform 平台名称
+ * @param roomId 房间号
+ * @returns 直播间链接或 null
+ */
+export function buildRoomLink(platform: string, roomId: string): string | null {
+  const platformLower = platform.toLowerCase();
+  const platformRoomLinkMap: Record<string, (roomId: string) => string> = {
+    bilibili: (id: string) => `https://live.bilibili.com/${id}`,
+    huya: (id: string) => `https://www.huya.com/${id}`,
+    douyu: (id: string) => `https://www.douyu.com/${id}`,
+    douyin: (id: string) => `https://live.douyin.com/${id}`,
+  };
+  const link = platformRoomLinkMap[platformLower]?.(roomId);
+  return link ?? null;
 }
 
 export function formatTime(time: string) {
