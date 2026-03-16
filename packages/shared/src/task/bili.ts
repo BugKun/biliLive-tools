@@ -16,18 +16,10 @@ import {
   BilibiliLiveDownloadVideoTask,
 } from "./task.js";
 import log from "../utils/log.js";
-import {
-  sleep,
-  encrypt,
-  decrypt,
-  getTempPath,
-  trashItem,
-  uuid,
-  replaceExtName,
-} from "../utils/index.js";
+import { sleep, encrypt, decrypt, getTempPath, trashItem, uuid } from "../utils/index.js";
 import { sendNotify } from "../notify.js";
 import { getBinPath, pasrseMetadata } from "./video.js";
-import { formatTitle, formatPartTitle, buildRoomLink } from "../utils/webhook.js";
+import { formatTitle, formatPartTitle, formatDesc, buildRoomLink } from "../utils/webhook.js";
 
 import type { BiliupConfig, BiliUser, AppConfig as AppConfigType } from "@biliLive-tools/types";
 import type { MediaOptions, DescV2 } from "@renmu/bili-api/dist/types/index.js";
@@ -336,6 +328,7 @@ export function formatOptions(options: BiliupConfig, coverDir: string | undefine
     topic_id: options.topic_id,
     mission_id: options.mission_id,
     is_only_self: options.is_only_self || 0,
+    space_hidden: options.space_hidden || 2,
     dtime: options.dtime ? options.dtime : undefined,
     watermark:
       options.copyright === 2 || options.watermark === undefined
@@ -518,8 +511,9 @@ async function preFormatOptions(
   const needParseForTitle = options.title.includes("{{");
   const needParseForSource = options.copyright === 2 && !options.source;
   const needParseForPartTitle = options.partTitleTemplate && !!options.partTitleTemplate.trim();
+  const needParseForDesc = options.desc && options.desc.includes("{{");
 
-  if (!needParseForTitle && !needParseForSource && !needParseForPartTitle) {
+  if (!needParseForTitle && !needParseForSource && !needParseForPartTitle && !needParseForDesc) {
     // 不需要解析，直接返回
     return {
       options,
@@ -568,6 +562,31 @@ async function preFormatOptions(
         );
       } catch (e) {
         log.error("格式化主标题失败", e);
+      }
+    }
+  }
+
+  // 格式化简介
+  if (needParseForDesc && parseResult) {
+    if (
+      parseResult.title &&
+      parseResult.username &&
+      parseResult.roomId &&
+      parseResult.startTimestamp
+    ) {
+      try {
+        resultOptions.desc = formatDesc(
+          {
+            title: parseResult.title,
+            username: parseResult.username,
+            time: new Date((parseResult.startTimestamp ?? 0) * 1000).toISOString(),
+            roomId: parseResult.roomId,
+            filename: path.basename(firstFilePath),
+          },
+          options.desc!,
+        );
+      } catch (e) {
+        log.error("格式化简介失败", e);
       }
     }
   }

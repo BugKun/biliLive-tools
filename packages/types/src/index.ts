@@ -403,6 +403,10 @@ interface DouyinRecorderConfig {
   api: "web" | "webHTML" | "mobile" | "userHTML" | "balance" | "random";
 }
 
+interface XhsRecorderConfig {
+  cookie: string;
+}
+
 // 录制全局配置
 export interface GlobalRecorder {
   /** 保存根目录 */
@@ -457,10 +461,12 @@ export interface GlobalRecorder {
   huya: HuyaRecorderConfig;
   /** 抖音特有的配置 */
   douyin: DouyinRecorderConfig;
+  /** 小红书特有的配置 */
+  xhs: XhsRecorderConfig;
 }
 
 export interface Recorder {
-  providerId: "DouYu" | "HuYa" | "Bilibili" | "DouYin";
+  providerId: "DouYu" | "HuYa" | "Bilibili" | "DouYin" | "XHS";
   id: string;
   channelId: string;
   remarks?: string;
@@ -1006,6 +1012,8 @@ export interface BiliupConfig {
   topic_name?: string | null;
   /** 是否仅自己可见 */
   is_only_self?: 0 | 1;
+  /** 在个人空间-投稿中隐藏：1：隐藏，2：不隐藏 */
+  space_hidden?: 1 | 2;
   /** 新分区 */
   human_type2?: number;
   /** 定时发布：10位秒级时间戳。必须距离提交时间>7200秒 */

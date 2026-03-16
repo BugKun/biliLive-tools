@@ -1,6 +1,6 @@
 # 直播录制
 
-biliLive-tools 支持 B站、斗鱼、虎牙、抖音四大平台的直播录制，包含弹幕和礼物信息。
+biliLive-tools 支持 B站、斗鱼、虎牙、抖音、小红书多平台的直播录制，包含弹幕和礼物信息。
 
 初始实现由 [LiveAutoRecord](https://github.com/WhiteMinds/LiveAutoRecord) 拓展而来
 
@@ -238,5 +238,6 @@ biliLive-tools 提供三种录制器引擎：
 - [斗鱼录制](https://www.npmjs.com/package/@bililive-tools/douyu-recorder)
 - [虎牙录制](https://www.npmjs.com/package/@bililive-tools/huya-recorder)
 - [抖音录制](https://www.npmjs.com/package/@bililive-tools/douyin-recorder)
+- [小红书录制](https://www.npmjs.com/package/@bililive-tools/xhs-recorder)
 - [虎牙弹幕监听](https://www.npmjs.com/package/huya-danma-listener)
 - [抖音弹幕监听](https://www.npmjs.com/package/douyin-danma-listener)

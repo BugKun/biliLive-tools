@@ -7,6 +7,7 @@ import { provider as providerForDouYu } from "@bililive-tools/douyu-recorder";
 import { provider as providerForHuYa } from "@bililive-tools/huya-recorder";
 import { provider as providerForBiliBili } from "@bililive-tools/bilibili-recorder";
 import { provider as providerForDouYin } from "@bililive-tools/douyin-recorder";
+import { provider as providerForXHS } from "@bililive-tools/xhs-recorder";
 
 import {
   createRecorderManager as createManager,
@@ -154,7 +155,13 @@ export async function createRecorderManager(appConfig: AppConfig) {
   const autoCheckLiveStatusAndRecord = config?.recorder?.autoRecord ?? false;
 
   const manager = createManager({
-    providers: [providerForDouYu, providerForHuYa, providerForBiliBili, providerForDouYin],
+    providers: [
+      providerForDouYu,
+      providerForHuYa,
+      providerForBiliBili,
+      providerForDouYin,
+      providerForXHS,
+    ],
     autoRemoveSystemReservedChars: true,
     autoCheckInterval: autoCheckInterval * 1000,
     savePathRule: savePathRule,
@@ -315,23 +322,59 @@ export async function createRecorderManager(appConfig: AppConfig) {
     } catch (error) {
       logger.error("Update live error", { recorder, filename, error });
     } finally {
-      data?.sendToWebhook &&
-        axios.post(
-          `http://127.0.0.1:${config.port}/webhook/custom`,
-          {
-            event: "FileClosed",
-            filePath: filename,
-            roomId: channelId,
-            time: endTime.toISOString(),
-            title: title,
-            username: username,
-            platform: recorder.providerId.toLowerCase(),
-            software: "biliLive-tools",
-          },
-          {
+      if (data?.sendToWebhook) {
+        const webhookUrl = `http://127.0.0.1:${config.port}/webhook/custom`;
+        const payload = {
+          event: "FileClosed",
+          filePath: filename,
+          roomId: channelId,
+          time: endTime.toISOString(),
+          title: title,
+          username: username,
+          platform: recorder.providerId.toLowerCase(),
+          software: "biliLive-tools",
+        };
+
+        logger.debug("Manager videoFileCompleted webhook start", {
+          recorderId: recorder.id,
+          webhookUrl,
+          filePath: filename,
+          roomId: channelId,
+          hasTitle: Boolean(title),
+          hasUsername: Boolean(username),
+        });
+
+        try {
+          await axios.post(webhookUrl, payload, {
             proxy: false,
-          },
-        );
+            timeout: 10000,
+          });
+          logger.debug("Manager videoFileCompleted webhook success", {
+            recorderId: recorder.id,
+            webhookUrl,
+            filePath: filename,
+          });
+        } catch (error) {
+          if (axios.isAxiosError(error)) {
+            logger.error("Manager videoFileCompleted webhook error", {
+              recorderId: recorder.id,
+              webhookUrl,
+              filePath: filename,
+              code: error.code,
+              message: error.message,
+              status: error.response?.status,
+              data: error.response?.data,
+            });
+          } else {
+            logger.error("Manager videoFileCompleted webhook error", {
+              recorderId: recorder.id,
+              webhookUrl,
+              filePath: filename,
+              error,
+            });
+          }
+        }
+      }
     }
 
     const xmlFile = replaceExtName(filename, ".xml");
@@ -414,10 +457,15 @@ export async function createRecorderManager(appConfig: AppConfig) {
 
   const recorderConfig = new RecorderConfig(appConfig);
   for (const recorder of recorderConfig.list()) {
-    manager.addRecorder({
-      ...recorder,
-      m3u8ProxyUrl: `http://127.0.0.1:${config.port}/bili/stream`,
-    });
+    try {
+      manager.addRecorder({
+        ...recorder,
+        m3u8ProxyUrl: `http://127.0.0.1:${config.port}/bili/stream`,
+      });
+    } catch (error) {
+      logger.error("Add recorder error", { recorder, error });
+      continue;
+    }
   }
 
   if (autoCheckLiveStatusAndRecord) manager.startCheckLoop();
