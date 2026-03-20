@@ -80,7 +80,7 @@ jobs:
               ca-certificates curl git tar xz-utils build-essential python3 pkg-config \
               libfontconfig1-dev libfreetype6-dev libcairo2-dev libpango1.0-dev libharfbuzz-dev \
               libjpeg-dev libpng-dev librsvg2-dev
-            # Install Node v20.10.0 for linux-armv7l from official tarball
+            # Install Node v24.10.0 for linux-armv7l from official tarball
             NODE_VER=20.10.0
             ARCH=linux-armv7l
             curl -fsSL "https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}-${ARCH}.tar.xz" -o /tmp/node.tar.xz
@@ -170,7 +170,7 @@ jobs:
 
       - name: Setup Node + pnpm (composite)
         uses: ./.github/actions/cli-setup
-      
+
       # 发布模式下优先复用同一提交的构建产物
       - name: Download prebuilt artifact for this commit
         id: download_artifact
