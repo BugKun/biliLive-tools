@@ -1,3 +1,22 @@
+# 3.11.0(2026.3.30)
+
+## 功能
+
+- 同步：阿里云盘支持同步到资源库 [#382](https://github.com/renmu123/biliLive-tools/pull/382)
+- 录制：支持批量开始和暂停 [#384](https://github.com/renmu123/biliLive-tools/pull/384)
+
+## 优化
+
+- 录制：支持快捷开始和停止监控直播间 [#388](https://github.com/renmu123/biliLive-tools/issues/388)
+- 录制：客户端抖音支持快速获取cookie
+- 同步：BaiduPCS-Go版本升级为 [v4.0.1](https://github.com/qjfoidnh/BaiduPCS-Go/releases/tag/v4.0.1)，添加`--norapid`来避免当前的接口问题
+- 录播下载：默认下载为ts格式，使用自带的队列进行转封装
+
+## Bug修复
+
+- 录制：修复小红书未设置cookie无法录制的bug
+- webhook: 修复某些情况下审核后删除会被额外执行 [#356](https://github.com/renmu123/biliLive-tools/issues/356)
+
 # 3.10.2(2026.3.17)
 
 ## 优化

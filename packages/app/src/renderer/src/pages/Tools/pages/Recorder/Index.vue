@@ -80,6 +80,13 @@
             >
               切割
             </div>
+            <div
+              class="section"
+              @click="item.disableAutoCheck ? startMonitor(item.id) : stopMonitor(item.id)"
+            >
+              {{ item.disableAutoCheck ? "开始监控" : "停止监控" }}
+            </div>
+            <div class="divider"></div>
             <div class="section" @click="edit(item.id)">直播间设置</div>
             <div class="section" @click="refresh(item.id)">刷新直播间信息</div>
             <div
@@ -131,6 +138,10 @@
       :results="batchParseResults"
       @completed="handleBatchCompleted"
     ></batchResultModal>
+    <batchOperateModal
+      v-model:visible="batchOperateModalVisible"
+      @completed="handleBatchOperateCompleted"
+    ></batchOperateModal>
     <videoModal :id="editId" v-model:visible="videoModalVisible" :video-url="videoUrl"></videoModal>
   </div>
 </template>
@@ -142,12 +153,14 @@ import { useVisibleColumns } from "@renderer/hooks/useVisibleColumns";
 import addModal from "./components/addModal.vue";
 import batchAddModal from "./components/batchAddModal.vue";
 import batchResultModal from "./components/batchResultModal.vue";
+import batchOperateModal from "./components/batchOperateModal.vue";
 import videoModal from "./components/videoModal.vue";
 import cardView from "./components/cardView.vue";
 import listView from "./components/listView.vue";
 import { useRouter } from "vue-router";
 import ButtonGroup from "@renderer/components/ButtonGroup.vue";
 import ColumnSelector from "@renderer/components/ColumnSelector.vue";
+import { platformOptions } from "./data";
 
 import { useEventListener, useStorage } from "@vueuse/core";
 import eventBus from "@renderer/utils/eventBus";
@@ -203,28 +216,6 @@ const params = ref<Parameters<typeof recoderApi.infoList>[0]>({
   page: 1,
 });
 
-const platformOptions = ref([
-  {
-    label: "斗鱼",
-    value: "DouYu",
-  },
-  {
-    label: "B站",
-    value: "Bilibili",
-  },
-  {
-    label: "虎牙",
-    value: "HuYa",
-  },
-  {
-    label: "抖音",
-    value: "DouYin",
-  },
-  {
-    label: "小红书",
-    value: "XHS",
-  },
-]);
 const statusOptions = ref([
   {
     label: "录制中",
@@ -359,6 +350,7 @@ const addModalVisible = ref(false);
 const batchAddModalVisible = ref(false);
 const batchResultModalVisible = ref(false);
 const batchParseResults = ref<any[]>([]);
+const batchOperateModalVisible = ref(false);
 
 const add = async () => {
   editId.value = "";
@@ -367,6 +359,10 @@ const add = async () => {
 
 const batchAdd = async () => {
   batchAddModalVisible.value = true;
+};
+
+const batchOperate = async () => {
+  batchOperateModalVisible.value = true;
 };
 
 const confirm = useConfirm();
@@ -394,6 +390,23 @@ const stopRecord = async (id: string) => {
 
 const cut = async (id: string) => {
   await recoderApi.cut(id);
+};
+
+const startMonitor = async (id: string) => {
+  await recoderApi.update(id, { id, disableAutoCheck: false } as any);
+  notice.success({
+    title: "已开始监控",
+  });
+  await recoderApi.startRecord(id);
+  getList();
+};
+
+const stopMonitor = async (id: string) => {
+  await recoderApi.update(id, { id, disableAutoCheck: true } as any);
+  notice.success({
+    title: "已停止监控",
+  });
+  getList();
 };
 
 const editId = ref("");
@@ -455,6 +468,11 @@ const handleBatchParsed = (results: any[]) => {
 const handleBatchCompleted = () => {
   // 刷新列表
   init();
+};
+
+const handleBatchOperateCompleted = async () => {
+  // 刷新列表
+  await getList();
 };
 
 const init = async () => {
@@ -604,11 +622,17 @@ const handleSortDirectionChange = (direction: "asc" | "desc") => {
   getList();
 };
 
-const actionBtns = ref([{ label: "批量添加", key: "batchAdd" }]);
+const actionBtns = ref([
+  { label: "批量添加", key: "batchAdd" },
+  { label: "批量操作", key: "batchOperate" },
+]);
 const handleActionClick = (key?: string | number) => {
   switch (key) {
     case "batchAdd":
       batchAdd();
+      break;
+    case "batchOperate":
+      batchOperate();
       break;
     case undefined:
       add();
@@ -634,6 +658,12 @@ const handleActionClick = (key?: string | number) => {
       color: var(--color-danger-text);
     }
   }
+}
+
+.divider {
+  height: 1px;
+  background-color: var(--bg-hover);
+  margin: 4px 0;
 }
 .sort-buttons {
   display: flex;
