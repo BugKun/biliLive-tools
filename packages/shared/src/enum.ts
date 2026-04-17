@@ -163,6 +163,7 @@ export const APP_DEFAULT_CONFIG: AppConfig = {
       danmuPresetId: "default",
       ignoreDanmu: false,
       exportSubtitle: true,
+      ignoreSubtitle: false,
     },
   },
   task: {
@@ -328,7 +329,7 @@ export const APP_DEFAULT_CONFIG: AppConfig = {
       enableStructuredOutput: true,
     },
     subtitleRecognize: {
-      modelId: "",
+      modelId: "bcut",
     },
   },
   biliUpload: {
@@ -373,16 +374,25 @@ export const APP_DEFAULT_CONFIG: AppConfig = {
       formatName: "auto",
       codecName: "auto",
       customHost: undefined,
+      checkInterval: undefined,
+      maxThreadCount: undefined,
+      waitTime: undefined,
     },
     douyu: {
       quality: 0,
       source: "auto",
+      checkInterval: undefined,
+      maxThreadCount: undefined,
+      waitTime: undefined,
     },
     huya: {
       quality: 0,
       formatName: "auto",
       source: "auto",
       api: "auto",
+      checkInterval: undefined,
+      maxThreadCount: undefined,
+      waitTime: undefined,
     },
     douyin: {
       quality: "origin",
@@ -390,9 +400,15 @@ export const APP_DEFAULT_CONFIG: AppConfig = {
       cookie: "",
       doubleScreen: true,
       api: "web",
+      checkInterval: undefined,
+      maxThreadCount: undefined,
+      waitTime: undefined,
     },
     xhs: {
       cookie: "",
+      checkInterval: undefined,
+      maxThreadCount: undefined,
+      waitTime: undefined,
     },
     saveDanma2DB: false,
   },

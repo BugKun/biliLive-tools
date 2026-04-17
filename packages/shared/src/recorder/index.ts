@@ -28,10 +28,16 @@ import { sendBySystem, send } from "../notify.js";
 import { danmaReport, parseDanmu } from "../danmu/index.js";
 
 import type { AppConfig } from "../config.js";
-import type { Recorder as RecorderConfigType } from "@biliLive-tools/types";
+import type {
+  Recorder as RecorderConfigType,
+  AppConfig as AppConfigType,
+} from "@biliLive-tools/types";
 import type { Recorder } from "@bililive-tools/manager";
 
 export { RecorderConfig };
+
+// 缓存直播结束通知的最后触发时间，避免频繁通知
+const endLiveNotificationCache = new Map<string, number>();
 
 async function sendStartLiveNotification(
   appConfig: AppConfig,
@@ -64,6 +70,18 @@ async function sendEndLiveNotification(
   recorder: Recorder,
   config: RecorderConfigType,
 ) {
+  const cacheKey = `${recorder.providerId}_${recorder.id}`;
+  const now = Date.now();
+  const lastNotificationTime = endLiveNotificationCache.get(cacheKey);
+
+  // 如果距离上次通知不到10分钟，跳过
+  if (lastNotificationTime && now - lastNotificationTime < 10 * 60 * 1000) {
+    logger.info(
+      `跳过直播结束通知，距离上次通知不到10分钟：${config.remarks} (${config.channelId})`,
+    );
+    return;
+  }
+
   const name = recorder?.liveInfo?.owner ? recorder.liveInfo.owner : config.remarks;
   const title = `${name}(${config.channelId}) 录制已停止`;
 
@@ -78,6 +96,9 @@ async function sendEndLiveNotification(
   } else {
     await send(title, `标题：${recorder?.liveInfo?.title}`, { type: "liveStart" });
   }
+
+  // 更新最后通知时间
+  endLiveNotificationCache.set(cacheKey, now);
 }
 
 export async function createRecorderManager(appConfig: AppConfig) {
@@ -96,6 +117,70 @@ export async function createRecorderManager(appConfig: AppConfig) {
     delete cloneArgs.extra;
     Object.assign(recorder, { ...omit(cloneArgs, ["id"]) });
     return recorder;
+  }
+
+  /**
+   * 构建manager配置项
+   */
+  async function buildManagerOptions(config: AppConfigType) {
+    const savePathRule = path.join(config?.recorder?.savePath, config?.recorder?.nameRule);
+    const autoCheckInterval = config?.recorder?.checkInterval ?? 60;
+    const maxThreadCount = config?.recorder?.maxThreadCount ?? 3;
+    const waitTime = config?.recorder?.waitTime ?? 0;
+
+    // 构建每个平台的检查配置
+    const providerCheckConfig: Record<
+      string,
+      {
+        autoCheckInterval?: number;
+        maxThreadCount?: number;
+        waitTime?: number;
+      }
+    > = {
+      [providerForBiliBili.id]: {
+        autoCheckInterval: (config?.recorder?.bilibili.checkInterval ?? autoCheckInterval) * 1000,
+        maxThreadCount: config?.recorder?.bilibili.maxThreadCount ?? maxThreadCount,
+        waitTime: config?.recorder?.bilibili.waitTime ?? waitTime,
+      },
+      [providerForDouYu.id]: {
+        autoCheckInterval: (config?.recorder?.douyu.checkInterval ?? autoCheckInterval) * 1000,
+        maxThreadCount: config?.recorder?.douyu.maxThreadCount ?? maxThreadCount,
+        waitTime: config?.recorder?.douyu.waitTime ?? waitTime,
+      },
+      [providerForHuYa.id]: {
+        autoCheckInterval: (config?.recorder?.huya.checkInterval ?? autoCheckInterval) * 1000,
+        maxThreadCount: config?.recorder?.huya.maxThreadCount ?? maxThreadCount,
+        waitTime: config?.recorder?.huya.waitTime ?? waitTime,
+      },
+      [providerForDouYin.id]: {
+        autoCheckInterval: (config?.recorder?.douyin.checkInterval ?? autoCheckInterval) * 1000,
+        maxThreadCount: config?.recorder?.douyin.maxThreadCount ?? maxThreadCount,
+        waitTime: config?.recorder?.douyin.waitTime ?? waitTime,
+      },
+      [providerForXHS.id]: {
+        autoCheckInterval: (config?.recorder?.xhs.checkInterval ?? autoCheckInterval) * 1000,
+        maxThreadCount: config?.recorder?.xhs.maxThreadCount ?? maxThreadCount,
+        waitTime: config?.recorder?.xhs.waitTime ?? waitTime,
+      },
+    };
+
+    return {
+      providers: [
+        providerForDouYu,
+        providerForHuYa,
+        providerForBiliBili,
+        providerForDouYin,
+        providerForXHS,
+      ],
+      autoRemoveSystemReservedChars: true,
+      autoCheckInterval: autoCheckInterval * 1000,
+      savePathRule: savePathRule,
+      biliBatchQuery: config?.recorder?.bilibili.useBatchQuery ?? false,
+      recordRetryImmediately: config?.recorder?.recordRetryImmediately ?? false,
+      maxThreadCount: maxThreadCount,
+      waitTime: waitTime,
+      providerCheckConfig,
+    };
   }
 
   /**
@@ -118,6 +203,11 @@ export async function createRecorderManager(appConfig: AppConfig) {
     manager.savePathRule = savePathRule;
     manager.biliBatchQuery = config?.recorder?.bilibili.useBatchQuery ?? false;
     manager.recordRetryImmediately = config?.recorder?.recordRetryImmediately ?? false;
+
+    const managerOptions = await buildManagerOptions(config);
+
+    // 更新每个平台的检查配置
+    manager.providerCheckConfig = managerOptions.providerCheckConfig;
 
     if (autoCheckLiveStatusAndRecord) {
       if (autoCheckLiveStatusAndRecord && !manager.isCheckLoopRunning) {
@@ -148,28 +238,10 @@ export async function createRecorderManager(appConfig: AppConfig) {
   setMesioPath(mesioPath);
   setBililivePath(bililiveRecorderPath);
 
-  const savePathRule = path.join(config?.recorder?.savePath, config?.recorder?.nameRule);
-  const autoCheckInterval = config?.recorder?.checkInterval ?? 60;
-  const maxThreadCount = config?.recorder?.maxThreadCount ?? 3;
-  const waitTime = config?.recorder?.waitTime ?? 0;
   const autoCheckLiveStatusAndRecord = config?.recorder?.autoRecord ?? false;
 
-  const manager = createManager({
-    providers: [
-      providerForDouYu,
-      providerForHuYa,
-      providerForBiliBili,
-      providerForDouYin,
-      providerForXHS,
-    ],
-    autoRemoveSystemReservedChars: true,
-    autoCheckInterval: autoCheckInterval * 1000,
-    savePathRule: savePathRule,
-    biliBatchQuery: config?.recorder?.bilibili.useBatchQuery ?? false,
-    recordRetryImmediately: config?.recorder?.recordRetryImmediately ?? false,
-    maxThreadCount: maxThreadCount,
-    waitTime: waitTime,
-  });
+  const managerOptions = await buildManagerOptions(config);
+  const manager = createManager(managerOptions);
 
   manager.on("RecorderDebugLog", ({ recorder, ...log }) => {
     if (log.type !== "ffmpeg") {
