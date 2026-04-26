@@ -284,6 +284,11 @@ async function getRoomInfoByHtml(
     const data = JSON.parse(jsonStr);
     const roomInfo = data.state.roomStore.roomInfo;
     const streamData = data.state.streamStore.streamData;
+
+    if (roomInfo?.room?.status === 2 && roomInfo?.room) {
+      console.log(`[DouYin-webHTML] living=true, full room data:`, JSON.stringify(roomInfo.room, null, 2));
+    }
+
     return {
       living: roomInfo?.room?.status === 2,
       nickname: roomInfo?.anchor?.nickname ?? "",
@@ -380,6 +385,10 @@ async function getRoomInfoByWeb(
   const data = res.data.data;
   const room = data?.data?.[0];
 
+  if (data?.room_status === 0 && room) {
+    console.log(`[DouYin-web] living=true, full room data:`, JSON.stringify(room, null, 2));
+  }
+
   return {
     living: data?.room_status === 0,
     nickname: data?.user?.nickname ?? "",
@@ -428,6 +437,11 @@ async function getRoomInfoByMobile(
 
   // @ts-ignore
   const room = res?.data?.data?.room;
+
+  if (room?.status === 2 && room) {
+    console.log(`[DouYin-mobile] living=true, full room data:`, JSON.stringify(room, null, 2));
+  }
+
   return {
     living: room?.status === 2,
     nickname: room?.owner?.nickname,
