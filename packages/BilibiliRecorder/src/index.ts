@@ -104,7 +104,7 @@ const checkLiveStatusAndRecord: Recorder["checkLiveStatusAndRecord"] = async fun
 }) {
   if (this.recordHandle != null) return this.recordHandle;
   try {
-    const { living, liveId, owner: _owner, title: _title } = await getLiveStatus(this.channelId);
+    const { living, liveId, owner: _owner, title: _title, live_status, is_encrypted } = await getLiveStatus(this.channelId);
     this.liveInfo = {
       living,
       owner: _owner,
@@ -116,6 +116,13 @@ const checkLiveStatusAndRecord: Recorder["checkLiveStatusAndRecord"] = async fun
       recordStartTime: new Date(),
     };
     this.state = "idle";
+    // 加密直播间日志
+    if (live_status === 1 && is_encrypted) {
+      this.emit("DebugLog", {
+        type: "common",
+        text: `${_owner} 房间 ${this.channelId} 已开播(live_status=1)但为加密直播间(is_encrypted=true)，跳过录制`,
+      });
+    }
   } catch (error) {
     this.state = "check-error";
     throw error;

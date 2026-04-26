@@ -44,6 +44,8 @@ export async function getLiveStatus(channelId: string): Promise<{
   liveId: string;
   owner: string;
   title: string;
+  live_status: number;
+  is_encrypted: boolean;
 }> {
   const obj = await getRoomBaseInfo(Number(channelId));
   const data = obj[Number(channelId)];
@@ -54,6 +56,8 @@ export async function getLiveStatus(channelId: string): Promise<{
       liveId: utils.md5(`${channelId}-${startTime?.getTime()}`),
       owner: data.uname,
       title: data.title,
+      live_status: data.live_status,
+      is_encrypted: data.is_encrypted,
     };
   }
 
@@ -65,6 +69,8 @@ export async function getLiveStatus(channelId: string): Promise<{
     ...roomInit,
     owner: "",
     title: "",
+    live_status: roomInit.live_status,
+    is_encrypted: roomInit.encrypted,
   };
 }
 
