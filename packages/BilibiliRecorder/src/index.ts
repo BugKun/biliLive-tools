@@ -118,10 +118,7 @@ const checkLiveStatusAndRecord: Recorder["checkLiveStatusAndRecord"] = async fun
     this.state = "idle";
     // 加密直播间日志
     if (live_status === 1 && is_encrypted) {
-      this.emit("Message", {
-        type: "common",
-        text: `${_owner} 房间 ${this.channelId} 已开播(live_status=1)但为加密直播间(is_encrypted=true)，跳过录制`,
-      });
+      console.log(`${_owner} 房间 ${this.channelId} 已开播(live_status=1)但为加密直播间(is_encrypted=true)，跳过录制`);
     }
   } catch (error) {
     this.state = "check-error";
