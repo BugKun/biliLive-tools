@@ -1,3 +1,8 @@
+# Next
+
+- 抖音用户页请求增加额外的错误判断 [#425](https://github.com/renmu123/biliLive-tools/pull/425)
+- `mobile`接口不再应用Cookie
+
 # 1.16.0
 
 - 优化重复文件的生成逻辑，避免覆盖

@@ -411,6 +411,7 @@ async function getRoomInfoByMobile(
   } = {},
 ): Promise<RoomInfo> {
   if (!secUserId) {
+    console.error(opts);
     throw new Error("Mobile API need secUserId, please set uid field");
   }
   if (typeof secUserId === "number") {
@@ -430,7 +431,7 @@ async function getRoomInfoByMobile(
     {
       params,
       headers: {
-        cookie: opts.auth,
+        // cookie: opts.auth,
       },
     },
   );
