@@ -90,7 +90,7 @@ const genHandler = (ipcMain: IpcMain) => {
   ipcMain.handle("common:setOpenAtLogin", setOpenAtLogin);
   ipcMain.handle("common:setTheme", setTheme);
   ipcMain.handle("common:setMenuBarVisible", setMenuBarVisible);
-  ipcMain.handle("common:createSubWindow", createCutWindow);
+  ipcMain.handle("common:createSubWindow", createSubWindow);
   ipcMain.handle("common:checkUpdate", manualCheckUpdate);
 
   registerHandlers(ipcMain, ffmpegHandlers);
@@ -99,13 +99,25 @@ const genHandler = (ipcMain: IpcMain) => {
   registerHandlers(ipcMain, cookieHandlers);
 };
 
-function createCutWindow() {
+function createSubWindow(
+  _event: IpcMainInvokeEvent,
+  options: {
+    routeName: string;
+    hideAside?: boolean;
+    hideMenuBar?: boolean;
+    maximized?: boolean;
+    query?: Record<string, string>;
+  },
+) {
   const css = `
   .layout>div>aside {
     display: none;
-  }`;
-  const appConfig = container.resolve("appConfig");
-  const menuBarVisible = appConfig.get("menuBarVisible");
+  }
+  .main-container{
+    margin: 0 !important;
+  }  
+  `;
+  const hideMenuBar = !!options.hideMenuBar;
 
   const subWindow = new BrowserWindow({
     webPreferences: {
@@ -113,22 +125,34 @@ function createCutWindow() {
       sandbox: false,
       webSecurity: false,
     },
-    autoHideMenuBar: !menuBarVisible,
+    autoHideMenuBar: hideMenuBar,
   });
 
   if (is.dev && process.env["ELECTRON_RENDERER_URL"]) {
-    subWindow.loadURL(process.env["ELECTRON_RENDERER_URL"] + "/#/videoCut");
+    let url = process.env["ELECTRON_RENDERER_URL"] + `/#/${options.routeName}`;
+    if (options.query) {
+      let queryString = Object.keys(options.query).map(
+        (key) => `${key}=${encodeURIComponent(options.query![key])}`,
+      );
+      url += `?${queryString.join("&")}`;
+    }
+    subWindow.loadURL(url.toString());
   } else {
     subWindow.loadFile(join(__dirname2, "../renderer/index.html"), {
-      hash: "videoCut",
+      hash: options.routeName,
+      query: options.query,
     });
   }
 
   subWindow.webContents.on("did-finish-load", () => {
-    subWindow.webContents.insertCSS(css);
+    if (options.hideAside) {
+      subWindow.webContents.insertCSS(css);
+    }
   });
   // subWindow.webContents.openDevTools();
-  subWindow.maximize();
+  if (options.maximized) {
+    subWindow.maximize();
+  }
   return true;
   return subWindow;
 }
@@ -457,15 +481,17 @@ const canQuit = async () => {
   if (isRunningTask || isRecordingTask) {
     const confirm = await dialog.showMessageBox(mainWin, {
       message: "检测到有未完成的任务或录制，是否退出？",
-      buttons: ["取消", "退出"],
+      buttons: ["取消", "强制退出", "退出"],
     });
-    if (confirm.response === 1) {
+    if (confirm.response === 2) {
       // 手动停止正在录制的直播
       for (const recorder of recorderManager.manager.recorders) {
         if (recorder.state === "recording") {
           await recorderManager.manager.stopRecord(recorder.id);
         }
       }
+      return true;
+    } else if (confirm.response === 1) {
       return true;
     } else {
       return false;

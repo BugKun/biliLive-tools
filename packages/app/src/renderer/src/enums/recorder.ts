@@ -389,6 +389,10 @@ const quality = {
 
 export const textInfo = {
   common: {
+    convert2Mp4: {
+      text: "转封装为MP4",
+      tip: "录制完成后将视频转封装为MP4格式，并删除原始文件，如果你需要使用webhook，那么请使用webhook的转封装功能",
+    },
     format: {
       text: "视频格式",
       tip: "ffmpeg录制器：选择自动时，分段为ts，不分段为fmp4<br/>FLV存在分辨率变化或参数变化会花屏，请尝试修复<br/>mesio和录播姬引擎不支持指定",
@@ -440,6 +444,11 @@ export const textInfo = {
     codecName: {
       text: "流编码",
       tip: "默认优先avc模式",
+    },
+    titleKeywords: {
+      text: "禁止标题关键词",
+      tip: "如果直播间标题包含这些关键词，则不会自动录制，多个关键词请用英文逗号分隔，或者使用正则表达式（如：/回放|录播/i），手动录制的不会被影响",
+      placeholder: "例如：回放,录播,重播 或 /回放|录播/i",
     },
   },
   douyu: {
