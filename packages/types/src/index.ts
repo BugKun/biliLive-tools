@@ -397,6 +397,9 @@ interface DouyuRecorderConfig extends RecorderCheckConfig {
   /** 画质：0：原画 2：高清 3：超清 4：蓝光4M 8：蓝光8M */
   quality: 0 | 2 | 3 | 4 | 8;
   source: string;
+  /** 流编码 */
+  codecName: CodecName;
+  api: "auto" | "newAPI" | "oldAPI";
 }
 
 interface HuyaRecorderConfig extends RecorderCheckConfig {
@@ -565,7 +568,7 @@ export interface Recorder {
   /** 调试等级 */
   debugLevel: "none" | "basic" | "verbose";
   /** API类型，仅抖音 */
-  api: HuyaRecorderConfig["api"] | DouyinRecorderConfig["api"];
+  api: HuyaRecorderConfig["api"] | DouyinRecorderConfig["api"] | DouyuRecorderConfig["api"];
   /** 自定义host */
   customHost?: string;
   // 不跟随全局配置字段
@@ -979,6 +982,8 @@ export interface FfmpegOptions {
   decode?: boolean;
   /** 是否重缩放分辨率 */
   resetResolution?: boolean;
+  /** 输出帧率，使用 fps 滤镜实现 */
+  fps?: number;
   /** 重缩放的分辨率 */
   resolutionWidth?: number;
   resolutionHeight?: number;
@@ -1031,9 +1036,10 @@ export interface BiliupConfig {
   desc?: string;
   dolby: 0 | 1; // 杜比
   hires: 0 | 1; // Hi-Res
-  copyright: 1 | 2; // 1：自制，2：转载
+  copyright: 1 | 2 | 3; // 1：自制，2：转载，3：其他创作声明
   tag: string[]; // 标签，不能为空，不能超过10个，调用接口验证
-  tid: number; // 174 投稿分区
+  // @deprecated，174 投稿分区
+  tid: number;
   source?: string; // 转载来源
   dynamic?: string; // 空间动态
   /** 封面，可能为文件名也有可能是绝对路径 */
@@ -1077,6 +1083,8 @@ export interface BiliupConfig {
   dtime?: number;
   // 表示按照cid顺序上传，编辑接口会根据这个参数对pathArray进行排序后上传，如果没有这个参数，则按照pathArray的顺序上传
   sortByCid?: Array<number>;
+  // 创作声明，仅当copyright=1、3时有效，// -1: 内容无需标注，1: 含AI生成内容，2：含虚构演绎内容，3：内容含营销信息，4：个人观点，仅供参考
+  creationStatement?: -1 | 1 | 2 | 3 | 4 | null;
 }
 
 export type BiliupConfigAppend = Partial<BiliupConfig> & {

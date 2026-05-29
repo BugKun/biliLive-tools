@@ -384,6 +384,8 @@ export const APP_DEFAULT_CONFIG: AppConfig = {
       checkInterval: undefined,
       maxThreadCount: undefined,
       waitTime: undefined,
+      codecName: "auto",
+      api: "auto",
     },
     huya: {
       quality: 0,

@@ -53,9 +53,14 @@ export default class RecorderConfig {
             return get(globalConfig, "quality");
           }
         } else if (key === "codecName") {
-          return get(globalConfig, "bilibili.codecName");
+          if (setting.providerId === "Bilibili") {
+            return get(globalConfig, "bilibili.codecName");
+          } else if (setting.providerId === "DouYu") {
+            return get(globalConfig, "douyu.codecName");
+          }
+          return "auto";
         } else if (key === "qualityRetry") {
-          return get(globalConfig, "bilibili.qualityRetry");
+          return get(globalConfig, "qualityRetry");
         } else if (key === "source") {
           return get(globalConfig, "douyu.source");
         } else if (key === "cookie") {
@@ -89,6 +94,8 @@ export default class RecorderConfig {
             return get(globalConfig, "douyin.api");
           } else if (setting.providerId === "HuYa") {
             return get(globalConfig, "huya.api");
+          } else if (setting.providerId === "DouYu") {
+            return get(globalConfig, "douyu.api");
           } else {
             return "auto";
           }

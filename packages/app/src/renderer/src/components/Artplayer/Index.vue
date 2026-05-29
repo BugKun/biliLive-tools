@@ -20,6 +20,7 @@ const props = withDefaults(
     option: {
       fullscreen?: boolean;
       url?: string;
+      type?: string;
       string?: any;
       plugins?: {
         heatmap?: {
@@ -142,7 +143,8 @@ onMounted(async () => {
     return;
   }
   instance = new Artplayer({
-    url: "",
+    url: props?.option?.url ?? "",
+    type: props?.option?.type ?? "",
     isLive: props.isLive,
     ...props.option,
     container: artRef.value,
@@ -163,10 +165,10 @@ onMounted(async () => {
           const flv = mpegts.createPlayer({
             type: "flv",
             url: url,
+            isLive: props.isLive,
           });
           flv.attachMediaElement(video);
           flv.load();
-          flv.play();
 
           art.flv = flv;
           art.on("destroy", () => flv.destroy());

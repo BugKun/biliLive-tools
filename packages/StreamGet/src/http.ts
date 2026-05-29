@@ -136,13 +136,13 @@ export class HttpClient {
         headers: {
           "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          Accept: "*/*",
           ...mergedOpts?.headers,
         },
         dispatcher: agent,
         headersTimeout: mergedOpts?.timeout || 10000,
       });
-
-      return await response.body.text();
+      return response.body.text();
     } catch (error) {
       throw new NetworkError(`请求失败: ${(error as Error).message}`, undefined);
     }

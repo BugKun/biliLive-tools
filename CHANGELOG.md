@@ -1,3 +1,32 @@
+# 3.15.0(2026.05.29)
+
+## 功能
+
+- 录制：斗鱼获取流迁移到新接口，支持流编码选项 [#449](https://github.com/renmu123/biliLive-tools/pull/449)
+- 录制：新增主播详情页用于数据展示 [#426](https://github.com/renmu123/biliLive-tools/pull/426)
+- B站上传：移除老分区参数，支持新创作声明 [#454](https://github.com/renmu123/biliLive-tools/pull/454)
+
+## 优化
+
+- 重构：暗黑模式优化 [#445](https://github.com/renmu123/biliLive-tools/pull/445)
+- 录制：非录制状态下也支持快速打开文件夹
+- 录制；ffmpeg录制器格式支持MP4容器，**如果出现突然中断，会导致视频损坏**
+- ffmpeg：支持帧率参数 [#438](https://github.com/renmu123/biliLive-tools/pull/438)
+
+## Bug修复
+
+- 录制：修复某些情况下等待时间参数不会被遵守的bug
+- 录制：修复并发参数无法热加载的bug
+- 录制：修复设置“流匹配重试次数”失效的bug
+- 录制：修复录制详情预览视频一些情况下的错误
+- 切片：修复web环境下无法识别字幕的bug [#447](https://github.com/renmu123/biliLive-tools/issues/447)
+- 下载：修复仅下载弹幕功能失效的bug
+
+## 其他
+
+- deps: pinia update to 0.3.4
+- deps: font-ls update to 0.6.6
+
 # 3.14.0(2026.05.14)
 
 ## 功能
@@ -15,6 +44,10 @@
 - 合并：增加更多合并的错误判断，并将判断修改为非阻断式
 - UI：文件选择栏支持显示文件后缀
 - 客户端退出时新增“强制退出”选项来进行强制退出
+
+## Bug修复
+
+- 修复某些情况下播放flv会自动播放的bug
 
 ## Bug修复
 

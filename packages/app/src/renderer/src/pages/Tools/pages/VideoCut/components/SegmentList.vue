@@ -158,7 +158,7 @@
 import { useThemeStore } from "@renderer/stores/theme";
 import SearchPopover from "./SearchPopover.vue";
 import { secondsToTimemark } from "@renderer/utils";
-import { useSegmentStore, useSubtitles } from "@renderer/stores";
+import { useSegmentStore, useSubtitles, useAppConfig } from "@renderer/stores";
 import {
   RadioButtonOffSharp,
   CheckmarkCircleOutline,
@@ -254,6 +254,7 @@ useEventListener(window, "resize", () => {
 });
 
 const videoInstance = inject("videoInstance") as Ref<InstanceType<typeof VideoPlayer>>;
+const { appConfig } = storeToRefs(useAppConfig());
 
 const { cuts, selectCutId } = storeToRefs(useSegmentStore());
 const subtitleStore = useSubtitles();
@@ -616,7 +617,7 @@ const subtitleRecognizeHandler = async (segment: Segment) => {
   // 获取配置（尝试获取，如果失败则使用默认值）
   let modelId: string | undefined = undefined;
 
-  const config = await window.api.config.getAll();
+  const config = appConfig.value;
   const models = config?.ai?.models || [];
   if (models.length === 0) {
     notice.error({
@@ -704,7 +705,7 @@ const lyricRecognizeHandler = async (segment: Segment) => {
   // 获取配置（尝试获取，如果失败则使用默认值）
   let modelId: string | undefined = undefined;
 
-  const config = await window.api.config.getAll();
+  const config = appConfig.value;
   const models = config?.ai?.models || [];
   if (models.length === 0) {
     notice.error({

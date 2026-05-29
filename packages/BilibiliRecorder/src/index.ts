@@ -29,6 +29,7 @@ function createRecorder(opts: RecorderCreateOpts): Recorder {
     ...mitt(),
     ...opts,
     cache: null as any,
+    appendTimeline: null as any,
 
     availableStreams: [],
     availableSources: [],
@@ -104,7 +105,7 @@ const checkLiveStatusAndRecord: Recorder["checkLiveStatusAndRecord"] = async fun
 }) {
   if (this.recordHandle != null) return this.recordHandle;
   try {
-    const { living, liveId, owner: _owner, title: _title, live_status, is_encrypted } = await getLiveStatus(this.channelId);
+    const { living, liveId, owner: _owner, title: _title } = await getLiveStatus(this.channelId);
     this.liveInfo = {
       living,
       owner: _owner,
@@ -115,16 +116,12 @@ const checkLiveStatusAndRecord: Recorder["checkLiveStatusAndRecord"] = async fun
       liveStartTime: new Date(),
       recordStartTime: new Date(),
     };
-    this.state = "idle";
-    // 加密直播间日志
-    if (live_status === 1 && is_encrypted) {
-      this.emit("DebugLog", {
-        type: "common",
-        text: `${_owner} 房间 ${this.channelId} 已开播(live_status=1)但为加密直播间(is_encrypted=true)，跳过录制`,
-      });
-    }
+    this.emit("stateChange", { state: "idle" });
   } catch (error) {
-    this.state = "check-error";
+    this.emit("stateChange", {
+      state: "check-error",
+      msg: `检查失败，` + (error instanceof Error ? error.message : String(error)),
+    });
     throw error;
   }
 
@@ -164,11 +161,14 @@ const checkLiveStatusAndRecord: Recorder["checkLiveStatusAndRecord"] = async fun
     });
   } catch (err) {
     if (qualityRetryLeft > 0) await this.cache.set("qualityRetryLeft", qualityRetryLeft - 1);
-    this.state = "check-error";
+    this.emit("stateChange", {
+      state: "check-error",
+      msg: `检查失败，` + (err instanceof Error ? err.message : String(err)),
+    });
     throw err;
   }
 
-  this.state = "recording";
+  this.emit("stateChange", { state: "recording" });
   const {
     streamOptions,
     currentStream: stream,
@@ -243,6 +243,7 @@ const checkLiveStatusAndRecord: Recorder["checkLiveStatusAndRecord"] = async fun
       headers: {
         Referer: "https://live.bilibili.com/",
       },
+      proxy: this.proxy,
     },
     onEnd,
     async () => {
@@ -310,7 +311,10 @@ const checkLiveStatusAndRecord: Recorder["checkLiveStatusAndRecord"] = async fun
       const hasTitleKeyword = utils.hasBlockedTitleKeywords(title, this.titleKeywords);
 
       if (hasTitleKeyword) {
-        this.state = "title-blocked";
+        this.emit("stateChange", {
+          state: "title-blocked",
+          msg: `停止录制，直播间标题 "${title}" 包含关键词 "${this.titleKeywords}"`,
+        });
         this.emit("DebugLog", {
           type: "common",
           text: `检测到标题包含关键词，停止录制：直播间标题 "${title}" 包含关键词 "${this.titleKeywords}"`,
@@ -320,6 +324,16 @@ const checkLiveStatusAndRecord: Recorder["checkLiveStatusAndRecord"] = async fun
         this.recordHandle && this.recordHandle.stop("直播间标题包含关键词");
       }
     }
+  });
+  danmaClient.on("open", () => {
+    this.appendTimeline({
+      text: "弹幕连接已建立",
+    });
+  });
+  danmaClient.on("close", () => {
+    this.appendTimeline({
+      text: "弹幕连接已关闭",
+    });
   });
 
   if (enableDanmaListen) {
@@ -344,7 +358,7 @@ const checkLiveStatusAndRecord: Recorder["checkLiveStatusAndRecord"] = async fun
   const stop = utils.singleton<RecordHandle["stop"]>(async (reason?: string) => {
     if (!this.recordHandle) return;
 
-    this.state = "stopping-record";
+    this.emit("stateChange", { state: "stopping-record" });
     intervalId && clearInterval(intervalId);
 
     try {
@@ -362,7 +376,7 @@ const checkLiveStatusAndRecord: Recorder["checkLiveStatusAndRecord"] = async fun
     this.emit("RecordStop", { recordHandle: this.recordHandle, reason });
     this.recordHandle = undefined;
     this.liveInfo = undefined;
-    this.state = "idle";
+    this.emit("stateChange", { state: "idle" });
     this.cache.set("qualityRetryLeft", this.qualityRetry);
   });
 
