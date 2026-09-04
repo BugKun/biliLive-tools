@@ -30,7 +30,6 @@ export const sendExternalEventRequest = async (type: string, data: unknown) => {
 
   try {
     await axios.post(webhookUrl, body, {
-      proxy: false,
       timeout: 10000,
     });
   } catch (error) {

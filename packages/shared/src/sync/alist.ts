@@ -116,7 +116,6 @@ export class Alist extends TypedEmitter<AlistEvents> {
     // 创建axios实例
     this.client = axios.create({
       baseURL: this.server,
-      proxy: false,
     });
 
     // 添加请求拦截器，自动添加token

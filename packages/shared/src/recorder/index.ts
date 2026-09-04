@@ -609,7 +609,6 @@ export async function createRecorderManager(appConfig: AppConfig) {
 
         try {
           await axios.post(webhookUrl, payload, {
-            proxy: false,
             timeout: 10000,
           });
           logger.debug("Manager videoFileCompleted webhook success", {
