@@ -70,7 +70,9 @@ export default class RecorderConfig {
         } else if (key === "source") {
           return get(globalConfig, "douyu.source");
         } else if (key === "cookie") {
-          if (setting.providerId === "DouYin") {
+          if (setting.providerId === "DouYu") {
+            return get(globalConfig, "douyu.cookie");
+          } else if (setting.providerId === "DouYin") {
             return get(globalConfig, "douyin.cookie");
           } else if (setting.providerId === "XHS") {
             return get(globalConfig, "xhs.cookie");
@@ -120,6 +122,11 @@ export default class RecorderConfig {
           } else {
             return undefined;
           }
+        } else if (key === "segmentOnTitleChange") {
+          if (setting.providerId === "Bilibili") {
+            return get(globalConfig, "bilibili.segmentOnTitleChange");
+          }
+          return false;
         } else {
           return get(globalConfig, key);
         }
@@ -149,6 +156,8 @@ export default class RecorderConfig {
           console.error(error);
         }
       }
+    } else if (setting.providerId === "DouYu") {
+      auth = getValue("cookie");
     } else if (setting.providerId === "DouYin") {
       auth = getValue("cookie");
       uid = setting?.uid;
@@ -217,6 +226,7 @@ export default class RecorderConfig {
       auth: auth,
       useM3U8Proxy: getValue("useM3U8Proxy") ?? false,
       customHost: getValue("customHost"),
+      segmentOnTitleChange: getValue("segmentOnTitleChange") ?? false,
       useServerTimestamp: getValue("useServerTimestamp") ?? true,
       formatName: formatName,
       codecName: getValue("codecName") ?? "auto",
