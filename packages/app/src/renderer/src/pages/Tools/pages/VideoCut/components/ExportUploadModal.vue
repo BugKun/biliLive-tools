@@ -82,7 +82,7 @@
 
   <SubtitleStyleModal
     v-model="showSubtitleStyleModal"
-    :initial-config="currentSubtitleStyle"
+    :id="exportOptions.subtitleStyleId || 'default'"
     @confirm="handleSubtitleStyleConfirm"
   />
   <BiliPresetEditDialog
@@ -179,7 +179,7 @@ const confirmExportAndUpload = async () => {
   //   });
   //   return;
   // }
-  if (!userInfo.value.uid) {
+  if (exportOptions.uploadPresetId && !userInfo.value.uid) {
     notice.error({
       title: "请点击左侧头像处先进行登录",
       duration: 1000,
@@ -297,8 +297,9 @@ const initSubtitleStyle = async () => {
   currentSubtitleStyle.value = data.config;
 };
 
-const handleSubtitleStyleConfirm = async (config: SubtitleOptions) => {
+const handleSubtitleStyleConfirm = async (config: SubtitleOptions, id: string) => {
   currentSubtitleStyle.value = config;
+  exportOptions.subtitleStyleId = id;
 };
 
 watch(visible, (newVal) => {

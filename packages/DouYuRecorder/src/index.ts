@@ -15,6 +15,7 @@ import type {
   RecorderCreateOpts,
   RecorderProvider,
   RecordHandle,
+  VideoFileCreatedPayload,
 } from "@bililive-tools/manager";
 import { DouyuParser } from "@bililive-tools/stream-get";
 
@@ -62,7 +63,13 @@ function createRecorder(opts: RecorderCreateOpts): Recorder {
       const res = await getStream({
         channelId: this.channelId,
         quality: this.quality,
+        source: this.source,
+        strictQuality: false,
+        onlyAudio: this.onlyAudio,
+        avoidEdgeCDN: true,
         codecName: this.codecName,
+        api: this.api,
+        auth: this.auth,
       });
       return res.currentStream;
     },
@@ -145,6 +152,7 @@ const checkLiveStatusAndRecord: Recorder["checkLiveStatusAndRecord"] = async fun
       avoidEdgeCDN: true,
       codecName: this.codecName,
       api: this.api,
+      auth: this.auth,
     });
   } catch (err) {
     if (qualityRetryLeft > 0) await this.cache.set("qualityRetryLeft", qualityRetryLeft - 1);
@@ -204,7 +212,12 @@ const checkLiveStatusAndRecord: Recorder["checkLiveStatusAndRecord"] = async fun
     },
   );
 
-  const handleVideoCreated = async ({ filename, title, cover, rawFilename }) => {
+  const handleVideoCreated = async ({
+    filename,
+    title,
+    cover,
+    rawFilename,
+  }: VideoFileCreatedPayload) => {
     this.emit("videoFileCreated", { filename, cover, rawFilename });
 
     if (title && this?.liveInfo) {
@@ -251,7 +264,7 @@ const checkLiveStatusAndRecord: Recorder["checkLiveStatusAndRecord"] = async fun
           type: "comment",
           timestamp: timestamp,
           text: msg.txt,
-          color: colorTab[msg.col] ?? "#ffffff",
+          color: colorTab[String(msg.col)] ?? "#ffffff",
           sender: {
             uid: msg.uid,
             name: msg.nn,

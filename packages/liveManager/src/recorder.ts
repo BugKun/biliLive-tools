@@ -7,8 +7,8 @@ import type { NamespacedCache } from "./cache.js";
 import type { DownloaderType } from "./downloader/index.js";
 import type { XmlStreamStats } from "./xml_stream_controller.js";
 
-type FormatName = "auto" | "flv" | "hls" | "fmp4" | "flv_only" | "hls_only" | "fmp4_only";
-type CodecName = "auto" | "avc" | "hevc" | "avc_only" | "hevc_only";
+export type FormatName = "auto" | "flv" | "hls" | "fmp4" | "flv_only" | "hls_only" | "fmp4_only";
+export type CodecName = "auto" | "avc" | "hevc" | "av1" | "avc_only" | "hevc_only" | "av1_only";
 
 export interface RecorderCreateOpts<E extends AnyObject = UnknownObject> {
   providerId: RecorderProvider<E>["id"];
@@ -79,6 +79,8 @@ export interface RecorderCreateOpts<E extends AnyObject = UnknownObject> {
    * 2. 正则表达式：'/pattern/flags'（如：'/回放|录播/i'）
    */
   titleKeywords?: string;
+  /** B站直播间标题变更时分段 */
+  segmentOnTitleChange?: boolean;
   /** 用于指定录制文件格式，auto时，分段使用ts，不分段使用mp4 */
   videoFormat?: "auto" | "ts" | "mkv" | "flv";
   /** 录制类型 */
@@ -119,6 +121,7 @@ export type SerializedRecorder<E extends AnyObject> = PickRequired<RecorderCreat
     | "liveInfo"
     | "uid"
     | "titleKeywords"
+    | "segmentOnTitleChange"
     // | "recordHandle"
   >;
 
@@ -141,6 +144,11 @@ export interface RecorderTimelineItem {
 export interface AppendRecorderTimelineArgs {
   startTime?: number;
   text: string;
+}
+
+export interface StreamRetryHint {
+  liveId: string;
+  preferAlternativeStream: boolean;
 }
 
 export interface RecordHandle {
@@ -237,6 +245,8 @@ export interface Recorder<E extends AnyObject = UnknownObject>
       getSavePath: GetSavePath;
       banLiveId?: string;
       isManualStart?: boolean;
+      /** 上一次使用的流疑似不可用，录制器可在同一场直播中优先尝试备用流 */
+      streamRetryHint?: StreamRetryHint;
     },
   ) => Promise<RecordHandle | null>;
   // 正在进行的录制的操作接口
@@ -255,7 +265,10 @@ export interface Recorder<E extends AnyObject = UnknownObject>
     liveStartTime: Date;
     area: string;
   }>;
-  getStream: (this: Recorder<E>) => Promise<{
+  getStream: (
+    this: Recorder<E>,
+    opts?: { formatName?: FormatName; formatPriorities?: Array<"flv" | "hls"> },
+  ) => Promise<{
     source: string;
     name: string;
     url: string;

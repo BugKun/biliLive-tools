@@ -226,6 +226,33 @@ export const douyinQualityOptions = [
   },
 ];
 
+export const tiktokQualityOptions = [
+  {
+    value: "origin",
+    label: "原画",
+  },
+  {
+    value: "uhd",
+    label: "蓝光",
+  },
+  {
+    value: "hd",
+    label: "超清",
+  },
+  {
+    value: "sd",
+    label: "高清",
+  },
+  {
+    value: "ld",
+    label: "标清",
+  },
+  {
+    value: "ao",
+    label: "音频流",
+  },
+];
+
 // b站流格式
 export const biliStreamFormatOptions = [
   {
@@ -259,7 +286,7 @@ export const biliStreamFormatOptions = [
 ];
 
 // b站流编码
-export const streamCodecOptions = [
+export const biliStreamCodecOptions = [
   {
     value: "auto",
     label: "自动",
@@ -273,12 +300,20 @@ export const streamCodecOptions = [
     value: "hevc",
   },
   {
+    label: "优先av1",
+    value: "av1",
+  },
+  {
     label: "强制avc",
     value: "avc_only",
   },
   {
     label: "强制hevc",
     value: "hevc_only",
+  },
+  {
+    label: "强制av1",
+    value: "av1_only",
   },
 ];
 
@@ -404,6 +439,13 @@ export const douyuApiTypeOptions = [
   { label: "旧接口", value: "oldAPI" },
 ];
 
+export const tiktokApiTypeOptions = [
+  { label: "自动", value: "auto" },
+  { label: "随机", value: "random" },
+  { label: "web接口", value: "web" },
+  { label: "直播html解析", value: "webHTML" },
+];
+
 const qualityRetry = {
   text: "流匹配重试次数",
   tip: "根据次数强制查询匹配画质及其他强制参数，在未选择原画的情况下，可能会导致开头漏录。匹配次数结束后如果无法匹配对应画质时会自动选择其他画质，-1为强制匹配",
@@ -476,6 +518,10 @@ export const textInfo = {
       tip: "如果直播间标题包含这些关键词，则不会自动录制，多个关键词请用英文逗号分隔，或者使用正则表达式（如：/回放|录播/i），手动录制的不会被影响",
       placeholder: "例如：回放,录播,重播 或 /回放|录播/i",
     },
+    segmentOnTitleChange: {
+      text: "标题变更时分段",
+      tip: "监听到直播间标题变更时创建新分段；录播姬引擎支持无损分割，其他引擎会中断录制",
+    },
   },
   douyu: {
     qualityRetry: qualityRetry,
@@ -487,6 +533,10 @@ export const textInfo = {
     api: {
       text: "请求接口",
       tip: `自动使用新接口，除了新接口额外支持hevc之外，我也不知道有啥区别，但还是保留了此选项`,
+    },
+    cookie: {
+      text: "Cookie",
+      tip: "2026.9.21 日起，斗鱼web接口已经无法获取最高画质，以及录制流过期时间为五分钟，你需要添加cookie来避免问题",
     },
   },
   huya: {

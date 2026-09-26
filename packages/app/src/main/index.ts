@@ -14,6 +14,7 @@ import {
   nativeTheme,
   crashReporter,
   nativeImage,
+  powerSaveBlocker,
 } from "electron";
 import { createContainer } from "awilix";
 
@@ -22,6 +23,7 @@ import { electronApp, optimizer, is } from "@electron-toolkit/utils";
 
 import log from "./utils/log";
 import { notify } from "./utils/index";
+import { PowerSaveController } from "./utils/powerSave";
 import { init } from "@biliLive-tools/shared";
 import { serverStart } from "@biliLive-tools/http";
 
@@ -37,6 +39,7 @@ import type { Theme, GlobalConfig } from "@biliLive-tools/types";
 
 export let mainWin: BrowserWindow;
 export let container = createContainer();
+const powerSaveController = new PowerSaveController(powerSaveBlocker);
 
 const SENTRY_CRASH_DSN =
   "https://aa05399bf7cf8b619177be3284d28fc8@o4511547045576704.ingest.us.sentry.io/4511547052720128";
@@ -61,6 +64,9 @@ contextMenu({
   showSearchWithGoogle: false,
   showSaveImageAs: false,
 });
+if (process.argv.includes("--disable-gpu")) {
+  app.disableHardwareAcceleration();
+}
 
 const WindowState = new Store<{
   winBounds: {
@@ -136,6 +142,8 @@ function createSubWindow(
   }  
   `;
   const hideMenuBar = !!options.hideMenuBar;
+  const queryString = options.query ? new URLSearchParams(options.query).toString() : "";
+  const route = queryString ? `${options.routeName}?${queryString}` : options.routeName;
 
   const subWindow = new BrowserWindow({
     webPreferences: {
@@ -147,18 +155,13 @@ function createSubWindow(
   });
 
   if (is.dev && process.env["ELECTRON_RENDERER_URL"]) {
-    let url = process.env["ELECTRON_RENDERER_URL"] + `/#/${options.routeName}`;
-    if (options.query) {
-      let queryString = Object.keys(options.query).map(
-        (key) => `${key}=${encodeURIComponent(options.query![key])}`,
-      );
-      url += `?${queryString.join("&")}`;
-    }
-    subWindow.loadURL(url.toString());
+    const url = process.env["ELECTRON_RENDERER_URL"] + `/#/${route}`;
+    subWindow.loadURL(url);
   } else {
     subWindow.loadFile(join(__dirname2, "../renderer/index.html"), {
-      hash: options.routeName,
-      query: options.query,
+      // Hash 路由只会解析 # 后面的查询参数。loadFile 的 query 会被放在
+      // index.html 与 hash 之间，导致 useRoute().query 在生产环境中为空。
+      hash: route,
     });
   }
 
@@ -222,7 +225,11 @@ function createWindow(): void {
     } else {
       // 用来静默启动
       const isHidden = process.argv.includes("--hidden");
-      if (!isHidden) mainWindow.show();
+      if (isHidden) {
+        mainWin.setSkipTaskbar(true);
+      } else {
+        mainWindow.show();
+      }
     }
   });
 
@@ -365,6 +372,7 @@ function createWindow(): void {
     {
       label: "显示",
       click: () => {
+        mainWin.setSkipTaskbar(false);
         mainWin.show();
       },
     },
@@ -785,6 +793,12 @@ const appInit = async () => {
   nativeTheme.themeSource = appConfig.get("theme");
   const menuBarVisible = appConfig.get("menuBarVisible");
   mainWin.setMenuBarVisibility(menuBarVisible);
+  powerSaveController.setEnabled(appConfig.get("preventSystemSleep"));
+  appConfig.on("update", (newData, oldData) => {
+    if (newData.preventSystemSleep !== oldData.preventSystemSleep) {
+      powerSaveController.setEnabled(newData.preventSystemSleep);
+    }
+  });
 
   // 检测更新
   if (appConfig.get("autoUpdate")) {

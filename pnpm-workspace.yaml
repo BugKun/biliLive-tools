@@ -10,15 +10,17 @@ packages:
 catalog:
   lodash-es: ^4.17.21
   axios: ^1.15.0
-  better-sqlite3: 12.6.2
+  better-sqlite3: 12.11.1
   font-ls: 0.6.6
   ntsuspend: ^1.0.2
   mitt: ^3.0.1
+  "fast-xml-parser": "^5.9.3"
 
 patchedDependencies:
   "trash": "patches/trash.patch"
 
 overrides:
+  typescript: npm:typescript-native-bridge@6.0.3-bridge.15.tsgo.7.0.2
   "node-abi": "3.92.0"
   "webworkify-webpack": "https://github.com/xqq/webworkify-webpack.git#24d1e719b4a6cac37a518b2bb10fe124527ef4ef"
 
@@ -45,3 +47,19 @@ minimumReleaseAgeExclude:
   - dmg-builder
   - electron-builder-squirrel-windows
   - electron-builder
+  - electron@42.5.0
+  - "@renmu/node-shazam@2.0.4"
+  - "@renmu/bili-api@2.15.2"
+  - "@napi-rs/canvas-android-arm64@1.0.9"
+  - "@napi-rs/canvas-darwin-arm64@1.0.9"
+  - "@napi-rs/canvas-darwin-x64@1.0.9"
+  - "@napi-rs/canvas-linux-arm-gnueabihf@1.0.9"
+  - "@napi-rs/canvas-linux-arm64-gnu@1.0.9"
+  - "@napi-rs/canvas-linux-arm64-musl@1.0.9"
+  - "@napi-rs/canvas-linux-riscv64-gnu@1.0.9"
+  - "@napi-rs/canvas-linux-x64-gnu@1.0.9"
+  - "@napi-rs/canvas-linux-x64-musl@1.0.9"
+  - "@napi-rs/canvas-win32-arm64-msvc@1.0.9"
+  - "@napi-rs/canvas-win32-x64-msvc@1.0.9"
+  - "@napi-rs/canvas@1.0.9"
+  - blive-message-listener@0.5.6-beta.1

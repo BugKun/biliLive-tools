@@ -12,6 +12,7 @@ export * from "./manager.js";
 export * from "./cache.js";
 export * from "./downloader/FFmpegDownloader.js";
 export { createDownloader } from "./downloader/index.js";
+export type { VideoFileCreatedPayload } from "./downloader/IDownloader.js";
 export { checkTitleKeywordsWhileRecording, checkTitleKeywordsBeforeRecord } from "./utils.js";
 export { utils };
 
@@ -51,6 +52,7 @@ export function defaultToJSON<E extends AnyObject>(
       "liveInfo",
       "uid",
       "titleKeywords",
+      "segmentOnTitleChange",
       // "recordHandle",
     ]),
   };
