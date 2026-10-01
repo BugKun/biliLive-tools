@@ -1063,6 +1063,13 @@ export interface FfmpegOptions {
   /** pk优化 */
   pkOptimize?: boolean;
   subtitleOptions?: SubtitleOptions;
+  /**
+   * 压制字体文件：设置后弹幕/字幕（force_style + fontsdir）与时间戳（drawtext fontfile）
+   * 强制使用该字体文件渲染，不依赖系统字体（思源黑体，OFL 开源授权，规避微软雅黑版权问题）。
+   * 未设置时默认查找 ffmpeg 所在目录的 SourceHanSansSC-Normal.otf（存在才启用），
+   * 文件不存在则不注入，沿用系统字体匹配
+   */
+  fontFile?: string;
 }
 
 export interface BiliupConfig {
