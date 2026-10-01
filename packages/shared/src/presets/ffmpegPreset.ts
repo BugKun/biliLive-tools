@@ -60,7 +60,8 @@ const commonPresetParams: {
   vf: "",
   timestampFollowDanmu: true,
   timestampExtra: "",
-  timestampFormat: "%Y-%m-%d %T",
+  // 默认不用 %T：部分 ffmpeg 构建的 strftime 不支持 %T（时间戳不渲染），%H:%M:%S 与其语义等价
+  timestampFormat: "%Y-%m-%d %H:%M:%S",
   pkOptimize: false,
 };
 

@@ -238,6 +238,37 @@ export const selectScaleMethod = (
   }
 };
 
+/**
+ * 压制字体的 family 名：必须与字体文件内部的 family 一致
+ * （SourceHanSansSC-Normal.otf 对应 Source Han Sans SC Normal，思源黑体，OFL 开源授权，规避微软雅黑版权问题）
+ */
+export const burnFontFamily = "Source Han Sans SC Normal";
+
+/**
+ * 解析压制字体文件：
+ * 1. ffmpegOptions.fontFile 显式指定
+ * 2. 未指定时默认取 ffmpeg 所在目录的 SourceHanSansSC-Normal.otf（存在才启用）
+ * 文件不存在时返回 undefined，不注入字体（字幕按 ass 样式名走系统字体匹配）
+ */
+export const resolveBurnFontFile = (fontFile?: string): string | undefined => {
+  let file: string | undefined = fontFile?.trim();
+  if (!file) {
+    try {
+      const { ffmpegPath } = getBinPath();
+      file = join(path.dirname(ffmpegPath), "SourceHanSansSC-Normal.otf");
+    } catch (e) {
+      return undefined;
+    }
+  }
+  if (!file || !fs.existsSync(file)) {
+    if (fontFile) {
+      log.warn(`压制字体文件不存在，跳过字体注入: ${file}`);
+    }
+    return undefined;
+  }
+  return file;
+};
+
 export class ComplexFilter {
   private filters: {
     filter: string;
@@ -318,11 +349,19 @@ export class ComplexFilter {
     return this.addFilter("scale", scaleFilter);
   }
 
-  addSubtitleFilter(assFile: string, options?: SubtitleOptions) {
+  addSubtitleFilter(
+    assFile: string,
+    options?: SubtitleOptions,
+    fontOptions?: { fontsdir: string; family: string },
+  ) {
     let filter = `${escaped(assFile)}`;
+    const forceStyle: string[] = [];
+    // 指定字体文件时强制思源黑体（libass 从 fontsdir 加载，不依赖系统字体）；
+    // 用户显式指定的 fontName 追加在后面，覆盖强制值
+    if (fontOptions) {
+      forceStyle.push(`FontName=${fontOptions.family}`);
+    }
     if (options) {
-      let forceStyle: string[] = [];
-
       if (options.fontName) {
         forceStyle.push(`FontName=${options.fontName}`);
       }
@@ -365,11 +404,15 @@ export class ComplexFilter {
       if (options.marginV) {
         forceStyle.push(`MarginV=${options.marginV}`);
       }
-
-      if (options)
-        if (forceStyle.length > 0) {
-          filter += `:force_style='${forceStyle.join(",")}'`;
-        }
+    }
+    if (forceStyle.length > 0) {
+      filter += `:force_style='${forceStyle.join(",")}'`;
+    }
+    // fontsdir 让 libass 从字体文件所在目录加载，不依赖系统字体。
+    // 注意 filtergraph 有两级转义（graph 级 + 选项级）：不加引号时 escaped() 的双反斜杠写法
+    // 与上面的字幕路径约定一致；加引号则引号内是字面量，会破坏转义
+    if (fontOptions) {
+      filter += `:fontsdir=${escaped(fontOptions.fontsdir)}`;
     }
     return this.addFilter("subtitles", filter);
   }
@@ -395,6 +438,7 @@ export class ComplexFilter {
     font,
     format,
     extraOptions,
+    fontFile,
   }: {
     startTimestamp: number;
     fontColor: string;
@@ -404,12 +448,21 @@ export class ComplexFilter {
     font?: string;
     format?: string;
     extraOptions?: string;
+    /** 字体文件路径，优先于 font 名称查找（不依赖系统字体） */
+    fontFile?: string;
   }) {
     if (!format) {
-      format = "%Y-%m-%d %T";
+      // 默认不用 %T：部分 ffmpeg 构建的 strftime 不支持 %T（整段文字不渲染），
+      // %H:%M:%S 与 %T 语义等价且在所有构建上可用
+      format = "%Y-%m-%d %H:%M:%S";
     }
-    let options = `text='%{pts\\:localtime\\:${startTimestamp}\\:${format}}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${x}:y=${y}`;
-    if (font) {
+    // 格式串中的冒号需要三级转义（graph 引号字面量 → 选项级 → 函数级），否则 text 会在选项解析时被切断
+    const escapedFormat = format.replaceAll(":", "\\\\\\:");
+    let options = `text='%{pts\\:localtime\\:${startTimestamp}\\:${escapedFormat}}':fontcolor=${fontColor}:fontsize=${fontSize}:x=${x}:y=${y}`;
+    if (fontFile) {
+      // 不加引号，与 escaped() 的双反斜杠转义配合（见 addSubtitleFilter 的说明）
+      options += `:fontfile=${escaped(fontFile)}`;
+    } else if (font) {
       options += `:font=${font}`;
     }
     if (extraOptions) {
@@ -417,6 +470,89 @@ export class ComplexFilter {
     }
 
     return this.addFilter("drawtext", options);
+  }
+
+  // ============ 硬件解码显式链路 ============
+  // 硬件解码后帧常驻显存，而弹幕/字幕/时间戳等 CPU 滤镜（libass/drawtext 只能跑 CPU）
+  // 必须在内存帧上运行。以下方法在 CPU/显存边界自动补传输滤镜：
+  //   显存→内存：hwdownload + format=nv12
+  //   内存→显存：hwupload（交硬件编码器零拷贝编码）
+
+  /** 在指定滤镜之后插入显存帧下载对（hwdownload + format=nv12），并改写后续滤镜的输入流 */
+  private insertPairAfter(index: number) {
+    const target = this.filters[index];
+    const scaleOut = target.outputs!;
+    const s1 = this.getNextStream();
+    const s2 = this.getNextStream();
+    this.filters.splice(
+      index + 1,
+      0,
+      { filter: "hwdownload", options: "", inputs: [scaleOut], outputs: s1 },
+      { filter: "format", options: "nv12", inputs: [s1], outputs: s2 },
+    );
+    const next = this.filters[index + 3];
+    if (next) {
+      // 只替换引用了缩放输出流的输入，保留其他输入（如 overlay 的第二路输入）
+      next.inputs = (next.inputs as string[]).map((s) => (s === scaleOut ? s2 : s));
+    } else {
+      this.latestOutputStream = s2;
+    }
+  }
+
+  /** 链首插入显存帧下载对：硬件解码后第一个滤镜若为 CPU 滤镜，需先把显存帧拉回内存 */
+  prependHwDownload() {
+    const first = this.filters[0];
+    if (!first) return;
+    const source = ((first.inputs as string[]) ?? ["0:v"])[0] ?? "0:v";
+    const s1 = this.getNextStream();
+    const s2 = this.getNextStream();
+    this.filters.unshift(
+      { filter: "hwdownload", options: "", inputs: [source], outputs: s1 },
+      { filter: "format", options: "nv12", inputs: [s1], outputs: s2 },
+    );
+    first.inputs = [s2];
+  }
+
+  /**
+   * 显存内滤镜（hwupload+scale / scale_cuda / scale_qsv，输出显存帧）之后若还有 CPU 滤镜，
+   * 自动在其后补显存帧下载对。链尾的显存内滤镜不处理（直接交硬件编码器）
+   */
+  insertHwDownloadAfterHwScales() {
+    const hwScaleFilters = [
+      "hwupload_cuda,scale_cuda",
+      "scale_cuda",
+      "hwupload,scale_qsv",
+      "scale_qsv",
+    ];
+    for (let i = 0; i < this.filters.length; i++) {
+      if (!hwScaleFilters.includes(this.filters[i].filter)) continue;
+      const next = this.filters[i + 1];
+      if (!next) break; // 链尾输出显存帧，直接编码
+      if (next.filter === "hwdownload") continue; // 已有下载
+      this.insertPairAfter(i);
+      i += 2;
+    }
+  }
+
+  /** 链尾追加显存帧上传（回显存交硬件编码器）。链尾已是显存内滤镜时无需上传 */
+  appendHwUpload(uploadFilter: "hwupload_cuda" | "hwupload", options = "") {
+    const last = this.filters[this.filters.length - 1];
+    if (!last) return;
+    if (
+      ["hwupload_cuda,scale_cuda", "scale_cuda", "hwupload,scale_qsv", "scale_qsv"].includes(
+        last.filter,
+      )
+    ) {
+      return;
+    }
+    const s = this.getNextStream();
+    this.filters.push({
+      filter: uploadFilter,
+      options,
+      inputs: [this.latestOutputStream],
+      outputs: s,
+    });
+    this.latestOutputStream = s;
   }
 
   getFilters() {
@@ -808,6 +944,11 @@ export const genMergeAssMp4Command = async (
     }
     const scaleMethod = selectScaleMethod(ffmpegOptions);
     const startTimestamp = await getDrawtextParams();
+    // 压制字体：显式 fontFile 或默认取 ffmpeg 所在目录的思源黑体文件，不存在则不注入
+    const burnFontFile = resolveBurnFontFile(ffmpegOptions.fontFile);
+    const fontOptions = burnFontFile
+      ? { fontsdir: path.dirname(burnFontFile), family: burnFontFamily }
+      : undefined;
 
     // 先缩放后渲染
     if (
@@ -815,10 +956,8 @@ export const genMergeAssMp4Command = async (
       ffmpegOptions.resolutionWidth &&
       ffmpegOptions.resolutionHeight
     ) {
-      let uesHardwareScale = false;
-      if (scaleHardware) {
-        uesHardwareScale = !assFile && !startTimestamp;
-      }
+      // 显式链路（命令组装层自动补 hwdownload/hwupload）下，显存内缩放可与 CPU 滤镜（弹幕/时间戳）共存
+      let uesHardwareScale = scaleHardware;
       complexFilter.addScaleFilter({
         resolutionWidth: ffmpegOptions.resolutionWidth,
         resolutionHeight: ffmpegOptions.resolutionHeight,
@@ -836,16 +975,16 @@ export const genMergeAssMp4Command = async (
     // 弹幕文件
     if (assFile) {
       if (files.hotProgressFilePath) {
-        const subtitleStream = complexFilter.addSubtitleFilter(assFile);
+        const subtitleStream = complexFilter.addSubtitleFilter(assFile, undefined, fontOptions);
         const colorkeyStream = complexFilter.addColorkeyFilter(["1"]);
         complexFilter.addOverlayFilter([subtitleStream, colorkeyStream]);
       } else {
-        complexFilter.addSubtitleFilter(assFile);
+        complexFilter.addSubtitleFilter(assFile, undefined, fontOptions);
       }
     }
     // 字幕文件
     if (subtitleFile) {
-      complexFilter.addSubtitleFilter(subtitleFile, ffmpegOptions.subtitleOptions);
+      complexFilter.addSubtitleFilter(subtitleFile, ffmpegOptions.subtitleOptions, fontOptions);
     }
 
     // 先渲染后缩放
@@ -877,9 +1016,11 @@ export const genMergeAssMp4Command = async (
         fontSize: ffmpegOptions.timestampFontSize ?? 24,
         x: ffmpegOptions.timestampX ?? 10,
         y: ffmpegOptions.timestampY ?? 10,
-        font: options.timestampFont,
+        // 指定字体文件时直接用 fontfile（不依赖系统字体），否则按名称跟随弹幕字体
+        font: burnFontFile ? undefined : options.timestampFont,
         format: ffmpegOptions.timestampFormat,
         extraOptions: ffmpegOptions.timestampExtra,
+        fontFile: burnFontFile,
       });
     }
     // pk优化
@@ -923,36 +1064,75 @@ export const genMergeAssMp4Command = async (
     command.inputOptions(`-to ${ffmpegOptions.to}`);
   }
 
-  // 如果不存在滤镜，但存在硬件编码，添加硬件解码
-  if (!complexFilter.getFilters().length && ffmpegOptions.decode) {
+  // ============ 硬件解码与显式链路 ============
+  // 原有零拷贝行为保留：无滤镜、或链上仅有显存内缩放时帧全程显存。
+  // 新增：开启解码加速（ffmpegOptions.decode）时，存在 CPU 滤镜（弹幕/字幕/时间戳，
+  // libass/drawtext 只能跑 CPU）不再移除硬件解码，改为显式链路——解码帧常驻显存，
+  // 在 CPU/显存边界自动补传输滤镜：hwdownload + format=nv12 回内存跑 CPU 滤镜，
+  // 处理完 hwupload 传回显存，交硬件编码器零拷贝编码
+  const filters = complexFilter.getFilters();
+  if (filters.length) {
+    const first = filters[0];
+    if (first.filter === "hwupload_cuda,scale_cuda") {
+      // nvenc 显存内缩放在链首：滤镜已假定显存输入，硬件解码直通（原有行为）
+      command.inputOptions("-hwaccel cuda");
+      command.inputOptions("-hwaccel_output_format cuda");
+      first.filter = "scale_cuda";
+      if (filters.length > 1) {
+        // 缩放后还有滤镜：缩放输出回内存跑 CPU 滤镜，链尾传回显存
+        complexFilter.insertHwDownloadAfterHwScales();
+        complexFilter.appendHwUpload("hwupload_cuda");
+      }
+    } else if (first.filter === "hwupload,scale_qsv") {
+      if (ffmpegOptions.decode) {
+        // 开启解码加速：QSV 解码输出显存帧，去掉链首冗余的 hwupload
+        command.inputOptions("-hwaccel qsv");
+        command.inputOptions("-hwaccel_output_format qsv");
+        first.filter = "scale_qsv";
+      } else {
+        // 软解：hwupload 从内存帧上传（原有行为）
+        command.inputOptions("-init_hw_device qsv=hw");
+        command.inputOptions("-filter_hw_device hw");
+      }
+      if (filters.length > 1) {
+        complexFilter.insertHwDownloadAfterHwScales();
+        complexFilter.appendHwUpload("hwupload", "extra_hw_frames=64");
+      }
+    } else if (first.filter === "vpp_amf") {
+      command.inputOptions("-hwaccel amf");
+      command.inputOptions("-init_hw_device amf=amf");
+      command.inputOptions("-filter_hw_device amf");
+    } else if (first.filter === "scale_qsv") {
+      // 上游行为保留：自定义 vf 的 scale_qsv 首滤镜
+      command.inputOptions("-hwaccel qsv");
+    } else if (ffmpegOptions.decode) {
+      // CPU 滤镜链 + 硬件解码：显式链路包装
+      const hardware = getHardwareAcceleration(ffmpegOptions.encoder);
+      if (hardware === "nvenc") {
+        command.inputOptions("-hwaccel cuda");
+        command.inputOptions("-hwaccel_output_format cuda");
+        complexFilter.prependHwDownload();
+        complexFilter.insertHwDownloadAfterHwScales();
+        complexFilter.appendHwUpload("hwupload_cuda");
+      } else if (hardware === "qsv") {
+        command.inputOptions("-hwaccel qsv");
+        command.inputOptions("-hwaccel_output_format qsv");
+        complexFilter.prependHwDownload();
+        complexFilter.insertHwDownloadAfterHwScales();
+        complexFilter.appendHwUpload("hwupload", "extra_hw_frames=64");
+      }
+      // amf/videotoolbox 暂不支持滤镜链下的硬件解码，维持软解
+    }
+  } else if (ffmpegOptions.decode) {
+    // 无滤镜：零拷贝全程显存（原有行为；qsv 修正为真正的硬件解码参数）
     const hardware = getHardwareAcceleration(ffmpegOptions.encoder);
     if (hardware === "nvenc") {
       command.inputOptions("-hwaccel cuda");
       command.inputOptions("-hwaccel_output_format cuda");
     } else if (hardware === "qsv") {
-      command.inputOptions("-init_hw_device qsv=hw");
-      command.inputOptions("-filter_hw_device hw");
+      command.inputOptions("-hwaccel qsv");
+      command.inputOptions("-hwaccel_output_format qsv");
     }
-  }
-
-  // 如果存在scale_qsv滤镜，添加硬件相关代码
-  if (complexFilter.getFilters().some((filter) => filter.filter === "hwupload,scale_qsv")) {
-    command.inputOptions("-init_hw_device qsv=hw");
-    command.inputOptions("-filter_hw_device hw");
-  }
-
-  // 当存在filter存在hwupload_cuda,scale_cuda且在第一个时，需要硬件解码
-  if (complexFilter.getFilters()?.[0]?.filter === "hwupload_cuda,scale_cuda") {
-    command.inputOptions("-hwaccel cuda");
-    command.inputOptions("-hwaccel_output_format cuda");
-    complexFilter.getFilters()[0].filter = "scale_cuda";
-  } else if (complexFilter.getFilters()?.[0]?.filter === "scale_qsv") {
-    // 仅在第一个时，需要硬件解码，其他情况不需要
-    command.inputOptions("-hwaccel qsv");
-  } else if (complexFilter.getFilters()?.[0]?.filter === "vpp_amf") {
-    command.inputOptions("-hwaccel amf");
-    command.inputOptions("-init_hw_device amf=amf");
-    command.inputOptions("-filter_hw_device amf");
   }
 
   // 构建最后的输出内容
