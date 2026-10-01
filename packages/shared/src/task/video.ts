@@ -180,6 +180,79 @@ export async function analyzeResolutionChanges(filePath: string): Promise<Resolu
   });
 }
 
+// ============ 语音直播间识别与自动分辨率修正 ============
+// 语音直播间（语音电台）的录制产物画面只是一张电台封面，原始分辨率极小（默认 256x256）。
+// 直接压制会让画面连同叠加的弹幕/字幕同比放大糊成一团，因此识别到后统一放大到目标分辨率：
+// 压制时在叠字幕之前插入缩放滤镜，字幕按放大后的分辨率渲染，比例才正确。
+
+/** 语音直播间判定分辨率：视频宽高等于该值时认定为语音直播间 */
+export const VOICE_ROOM_VIDEO_WIDTH = 256;
+export const VOICE_ROOM_VIDEO_HEIGHT = 256;
+/** 语音直播间压制/换算使用的目标分辨率（改这里即可同时影响压制滤镜与弹幕换算） */
+export const VOICE_ROOM_TARGET_WIDTH = 750;
+export const VOICE_ROOM_TARGET_HEIGHT = 750;
+
+export interface VoiceRoomResolution {
+  /** ffprobe 探测到的原始分辨率，如 "256x256" */
+  raw: string;
+  /** 是否为语音直播间录制产物 */
+  isVoiceRoom: boolean;
+  /** 压制应使用的宽（语音直播间为放大后的目标值，否则保持原始值） */
+  width: number;
+  /** 压制应使用的高 */
+  height: number;
+  /** `${width}x${height}` */
+  resolution: string;
+}
+
+/** 是否为语音直播间的录制分辨率 */
+export const isVoiceRoomResolution = (width: unknown, height: unknown): boolean =>
+  width === VOICE_ROOM_VIDEO_WIDTH && height === VOICE_ROOM_VIDEO_HEIGHT;
+
+/** 由原始宽高推导压制分辨率：语音直播间放大到目标分辨率，其余保持原样 */
+export const resolveVoiceRoomResolution = (width: number, height: number): VoiceRoomResolution => {
+  const isVoiceRoom = isVoiceRoomResolution(width, height);
+  const targetWidth = isVoiceRoom ? VOICE_ROOM_TARGET_WIDTH : width;
+  const targetHeight = isVoiceRoom ? VOICE_ROOM_TARGET_HEIGHT : height;
+  return {
+    raw: `${width}x${height}`,
+    isVoiceRoom,
+    width: targetWidth,
+    height: targetHeight,
+    resolution: `${targetWidth}x${targetHeight}`,
+  };
+};
+
+/** 读取视频首条视频流的分辨率 */
+export const readVideoResolution = async (input: string): Promise<Resolution> => {
+  const { ffprobePath } = getBinPath();
+  const { stdout } = await executeCommand(
+    `${ffprobePath} -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "${input}"`,
+  );
+  const [width, height] = String(stdout).trim().split("x").map(Number);
+  if (!Number.isFinite(width) || !Number.isFinite(height)) {
+    throw new Error(`无法解析视频分辨率: ${stdout}`);
+  }
+  return { width, height };
+};
+
+/**
+ * 探测视频是否需要做语音直播间分辨率修正
+ * 探测失败（文件不存在、ffprobe 缺失或异常）一律返回 null，调用方按原始分辨率继续处理
+ */
+export const resolveVideoResolution = async (
+  input: string,
+): Promise<VoiceRoomResolution | null> => {
+  try {
+    if (!input || !(await pathExists(input))) return null;
+    const { width, height } = await readVideoResolution(input);
+    return resolveVoiceRoomResolution(width, height);
+  } catch (error: any) {
+    log.warn("视频分辨率探测失败，跳过语音直播间识别", input, error?.message ?? error);
+    return null;
+  }
+};
+
 export const convertImage2Video = async (
   inputDir: string,
   output: string,
@@ -938,6 +1011,28 @@ export const genMergeAssMp4Command = async (
     return commentTimestamp;
   }
 
+  // 语音直播间：录制画面只有封面大小（默认 256x256），识别到后压制时自动放大。
+  // 自定义 vf 中每出现一次 $origin 都会重建一遍默认滤镜，故探测结果按任务缓存，只走一次 ffprobe
+  let voiceRoomInfo: VoiceRoomResolution | null | undefined;
+  const getVoiceRoomInfo = async (): Promise<VoiceRoomResolution | null> => {
+    if (voiceRoomInfo !== undefined) return voiceRoomInfo;
+    // 用户已显式指定目标分辨率时不介入；流复制（copy）加滤镜会强制重编码，同样跳过
+    if (selectScaleMethod(ffmpegOptions) !== "none" || ffmpegOptions.encoder === "copy") {
+      voiceRoomInfo = null;
+      return voiceRoomInfo;
+    }
+    const result = await resolveVideoResolution(files.videoFilePath);
+    voiceRoomInfo = result;
+    if (result?.isVoiceRoom) {
+      log.info(
+        "识别到语音直播间，自动修正压制分辨率",
+        files.videoFilePath,
+        `${result.raw} -> ${result.resolution}`,
+      );
+    }
+    return voiceRoomInfo;
+  };
+
   async function addDefaultComplexFilter(scaleHardware: boolean = false) {
     if (ffmpegOptions.pkOptimize) {
       ffmpegOptions.forceOriginalAspectRatio = "decrease";
@@ -949,6 +1044,19 @@ export const genMergeAssMp4Command = async (
     const fontOptions = burnFontFile
       ? { fontsdir: path.dirname(burnFontFile), family: burnFontFamily }
       : undefined;
+
+    // 语音直播间：先把画面放大到目标分辨率，再叠加弹幕/字幕（字幕按放大后的分辨率渲染才不会被拉糊）
+    const voiceRoom = await getVoiceRoomInfo();
+    if (voiceRoom?.isVoiceRoom) {
+      complexFilter.addScaleFilter({
+        resolutionWidth: voiceRoom.width,
+        resolutionHeight: voiceRoom.height,
+        swsFlags: ffmpegOptions.swsFlags ?? "",
+        encoder: ffmpegOptions.encoder,
+        useHardware: ffmpegOptions.hardwareScaleFilter ? scaleHardware : false,
+        forceOriginalAspectRatio: ffmpegOptions.forceOriginalAspectRatio ?? "auto",
+      });
+    }
 
     // 先缩放后渲染
     if (

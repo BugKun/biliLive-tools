@@ -1,7 +1,47 @@
-import { expect, describe, it } from "vitest";
+import { expect, describe, it, vi, beforeEach, afterEach } from "vitest";
 import { genFfmpegParams } from "../src/utils/index";
-import { genMergeAssMp4Command, selectScaleMethod, ComplexFilter } from "../src/task/video";
+import { appConfig } from "../src/config.js";
+import {
+  genMergeAssMp4Command,
+  selectScaleMethod,
+  ComplexFilter,
+  isVoiceRoomResolution,
+  resolveVoiceRoomResolution,
+  VOICE_ROOM_VIDEO_WIDTH,
+  VOICE_ROOM_VIDEO_HEIGHT,
+  VOICE_ROOM_TARGET_WIDTH,
+  VOICE_ROOM_TARGET_HEIGHT,
+} from "../src/task/video";
 import type { FfmpegOptions, VideoCodec } from "@biliLive-tools/types";
+
+// ffprobe 探测桩：默认返回普通分辨率，语音直播间用例内部改成 256x256
+const probe = vi.hoisted(() => ({
+  resolution: "1920x1080",
+  fail: false,
+  // 默认当作文件不存在，避免与分辨率无关的老用例走一次无意义的探测
+  exists: false,
+}));
+
+vi.mock("../src/utils/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils/index.js")>();
+  return {
+    ...actual,
+    pathExists: async () => probe.exists,
+    executeCommand: async (command: string) => {
+      if (String(command).includes("-show_entries stream=width,height")) {
+        if (probe.fail) throw new Error("ffprobe failed");
+        return { stdout: probe.resolution, stderr: "" };
+      }
+      return actual.executeCommand(command);
+    },
+  };
+});
+
+// fluent-ffmpeg 命令对象：取 -filter_complex 的滤镜链
+const getFilterValue = (args: string[]): string => {
+  const index = args.indexOf("-filter_complex");
+  return index === -1 ? "" : (args[index + 1] ?? "");
+};
 
 describe.concurrent("通用ffmpeg参数生成", () => {
   it("视频编码器：h264_nvenc", () => {
@@ -1282,5 +1322,188 @@ describe.concurrent("ComplexFilter", () => {
         outputs: "0:video",
       },
     ]);
+  });
+});
+
+describe("语音直播间分辨率判定", () => {
+  it("封面尺寸判定为语音直播间", () => {
+    expect(isVoiceRoomResolution(VOICE_ROOM_VIDEO_WIDTH, VOICE_ROOM_VIDEO_HEIGHT)).toBe(true);
+    expect(isVoiceRoomResolution(256, 256)).toBe(true);
+  });
+  it("其余尺寸均不判定为语音直播间", () => {
+    expect(isVoiceRoomResolution(1920, 1080)).toBe(false);
+    expect(isVoiceRoomResolution(256, 144)).toBe(false);
+    expect(isVoiceRoomResolution(1440, 256)).toBe(false);
+    expect(isVoiceRoomResolution(undefined, undefined)).toBe(false);
+  });
+  it("语音直播间：放大到目标分辨率", () => {
+    expect(resolveVoiceRoomResolution(256, 256)).toEqual({
+      raw: "256x256",
+      isVoiceRoom: true,
+      width: VOICE_ROOM_TARGET_WIDTH,
+      height: VOICE_ROOM_TARGET_HEIGHT,
+      resolution: `${VOICE_ROOM_TARGET_WIDTH}x${VOICE_ROOM_TARGET_HEIGHT}`,
+    });
+  });
+  it("普通视频：保持原始分辨率", () => {
+    expect(resolveVoiceRoomResolution(1920, 1080)).toEqual({
+      raw: "1920x1080",
+      isVoiceRoom: false,
+      width: 1920,
+      height: 1080,
+      resolution: "1920x1080",
+    });
+  });
+});
+
+// 共享 ffprobe 桩状态，不能并发执行
+describe("genMergeAssMp4Command 语音直播间自动分辨率", () => {
+  const files = {
+    videoFilePath: "/path/to/video.mp4",
+    assFilePath: "/path/to/subtitle.ass",
+    outputPath: "/path/to/output.mp4",
+    hotProgressFilePath: undefined,
+  };
+
+  beforeEach(() => {
+    probe.resolution = "256x256";
+    probe.fail = false;
+    probe.exists = true;
+    // getBinPath 依赖容器，测试环境未初始化，这里只让它能拿到 ffprobe 路径
+    vi.spyOn(appConfig, "getAll").mockReturnValue({
+      customExecPath: true,
+      ffprobePath: "ffprobe",
+    } as any);
+  });
+  afterEach(() => {
+    probe.resolution = "1920x1080";
+    probe.exists = false;
+    vi.restoreAllMocks();
+  });
+
+  it("语音直播间：叠字幕前插入放大滤镜", async () => {
+    const command = await genMergeAssMp4Command(
+      { ...files },
+      { encoder: "libx264", audioCodec: "copy" },
+    );
+    const args = command._getArguments();
+    const scale = `scale=${VOICE_ROOM_TARGET_WIDTH}:${VOICE_ROOM_TARGET_HEIGHT}`;
+    expect(args).toEqual([
+      "-i",
+      "/path/to/video.mp4",
+      "-y",
+      "-filter_complex",
+      `[0:v]${scale}[0:video];[0:video]subtitles=/path/to/subtitle.ass[1:video]`,
+      "-map",
+      "[1:video]",
+      "-map",
+      "0:a",
+      "-c:v",
+      "libx264",
+      "-c:a",
+      "copy",
+      "/path/to/output.mp4",
+    ]);
+    // 必须先放大再叠字幕，字幕按放大后的分辨率渲染
+    const filter = args[args.indexOf("-filter_complex") + 1];
+    expect(filter.indexOf(scale)).toBeLessThan(filter.indexOf("subtitles="));
+  });
+
+  it("语音直播间：无弹幕时同样放大，不被封面尺寸上传", async () => {
+    const command = await genMergeAssMp4Command(
+      { ...files, assFilePath: undefined },
+      { encoder: "libx264", audioCodec: "copy" },
+    );
+    const filter = getFilterValue(command._getArguments());
+    expect(filter).toBe(
+      `[0:v]scale=${VOICE_ROOM_TARGET_WIDTH}:${VOICE_ROOM_TARGET_HEIGHT}[0:video]`,
+    );
+  });
+
+  it("普通分辨率：不插入放大滤镜", async () => {
+    probe.resolution = "1920x1080";
+    const command = await genMergeAssMp4Command(
+      { ...files },
+      { encoder: "libx264", audioCodec: "copy" },
+    );
+    const filter = getFilterValue(command._getArguments());
+    expect(filter).toBe("[0:v]subtitles=/path/to/subtitle.ass[0:video]");
+  });
+
+  it("用户已显式配置分辨率时以用户配置为准", async () => {
+    const command = await genMergeAssMp4Command(
+      { ...files },
+      {
+        encoder: "libx264",
+        audioCodec: "copy",
+        resetResolution: true,
+        resolutionWidth: 1920,
+        resolutionHeight: 1080,
+        scaleMethod: "before",
+      },
+    );
+    const filter = getFilterValue(command._getArguments());
+    expect(filter).toBe(
+      "[0:v]scale=1920:1080[0:video];[0:video]subtitles=/path/to/subtitle.ass[1:video]",
+    );
+    expect(filter).not.toContain(`scale=${VOICE_ROOM_TARGET_WIDTH}:${VOICE_ROOM_TARGET_HEIGHT}`);
+  });
+
+  it("仅开启 resetResolution 但未填宽高时，不影响放大判定", async () => {
+    const command = await genMergeAssMp4Command(
+      { ...files },
+      { encoder: "libx264", audioCodec: "copy", resetResolution: true },
+    );
+    const filter = getFilterValue(command._getArguments());
+    expect(filter).toContain(`scale=${VOICE_ROOM_TARGET_WIDTH}:${VOICE_ROOM_TARGET_HEIGHT}`);
+  });
+
+  it("流复制：不注入滤镜，避免强制重编码", async () => {
+    const command = await genMergeAssMp4Command(
+      { ...files },
+      { encoder: "copy", audioCodec: "copy" },
+    );
+    const filter = getFilterValue(command._getArguments());
+    expect(filter).toBe("[0:v]subtitles=/path/to/subtitle.ass[0:video]");
+  });
+
+  it("ffprobe 探测失败：降级为原始分辨率压制", async () => {
+    probe.fail = true;
+    const command = await genMergeAssMp4Command(
+      { ...files },
+      { encoder: "libx264", audioCodec: "copy" },
+    );
+    const filter = getFilterValue(command._getArguments());
+    expect(filter).toBe("[0:v]subtitles=/path/to/subtitle.ass[0:video]");
+  });
+
+  it("视频文件不存在：跳过探测，按原始分辨率压制", async () => {
+    probe.exists = false;
+    const command = await genMergeAssMp4Command(
+      { ...files },
+      { encoder: "libx264", audioCodec: "copy" },
+    );
+    const filter = getFilterValue(command._getArguments());
+    expect(filter).toBe("[0:v]subtitles=/path/to/subtitle.ass[0:video]");
+  });
+
+  it("硬件缩放链路：nvenc 下放大走 scale_cuda 并在之后回内存叠字幕", async () => {
+    const command = await genMergeAssMp4Command(
+      { ...files },
+      {
+        encoder: "hevc_nvenc",
+        audioCodec: "copy",
+        decode: true,
+        hardwareScaleFilter: true,
+        swsFlags: "auto",
+      },
+    );
+    const filter = getFilterValue(command._getArguments());
+    expect(filter.startsWith(`[0:v]scale_cuda=${VOICE_ROOM_TARGET_WIDTH}`)).toBe(true);
+    expect(filter).not.toContain("hwupload_cuda,scale_cuda");
+    const downloadIdx = filter.indexOf("hwdownload");
+    const subtitlesIdx = filter.indexOf("subtitles=");
+    expect(downloadIdx).toBeGreaterThan(-1);
+    expect(downloadIdx).toBeLessThan(subtitlesIdx);
   });
 });
