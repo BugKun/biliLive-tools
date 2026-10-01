@@ -418,11 +418,12 @@ describe.concurrent("genMergeAssMp4Command", () => {
 
     const command = await genMergeAssMp4Command(files, ffmpegOptions);
     const args = command._getArguments();
+    // 显式链路改造：qsv 硬解改为真正的 -hwaccel qsv（原 init_hw_device 写法并不会启用解码）
     expect(args).toEqual([
-      "-init_hw_device",
-      "qsv=hw",
-      "-filter_hw_device",
-      "hw",
+      "-hwaccel",
+      "qsv",
+      "-hwaccel_output_format",
+      "qsv",
       "-i",
       "/path/to/video.mp4",
       "-y",
@@ -529,7 +530,7 @@ describe.concurrent("genMergeAssMp4Command", () => {
       "/path/to/video.mp4",
       "-y",
       "-filter_complex",
-      "[0:v]subtitles=/path/to/subtitle.ass[0:video];[0:video]drawtext=text='%{pts\\:localtime\\:1633831810\\:%Y-%m-%d %T}':fontcolor=white:fontsize=24:x=10:y=10[1:video]",
+      "[0:v]subtitles=/path/to/subtitle.ass[0:video];[0:video]drawtext=text='%{pts\\:localtime\\:1633831810\\:%Y-%m-%d %H\\\\\\:%M\\\\\\:%S}':fontcolor=white:fontsize=24:x=10:y=10[1:video]",
       "-map",
       "[1:video]",
       "-map",
@@ -598,7 +599,7 @@ describe.concurrent("genMergeAssMp4Command", () => {
       "/path/to/video.mp4",
       "-y",
       "-filter_complex",
-      "[0:v]fps=60[0:video];[0:video]subtitles=/path/to/subtitle.ass[1:video];[1:video]drawtext=text='%{pts\\:localtime\\:1633831810\\:%Y-%m-%d %T}':fontcolor=white:fontsize=24:x=10:y=10[2:video]",
+      "[0:v]fps=60[0:video];[0:video]subtitles=/path/to/subtitle.ass[1:video];[1:video]drawtext=text='%{pts\\:localtime\\:1633831810\\:%Y-%m-%d %H\\\\\\:%M\\\\\\:%S}':fontcolor=white:fontsize=24:x=10:y=10[2:video]",
       "-map",
       "[2:video]",
       "-map",
@@ -781,14 +782,19 @@ describe.concurrent("genMergeAssMp4Command", () => {
 
         const command = await genMergeAssMp4Command(files, ffmpegOptions);
         const args = command._getArguments();
+        // 显式链路改造：before 模式硬件缩放解锁，显存内缩放后回内存跑弹幕，链尾传回显存
         expect(args).toEqual([
+          "-hwaccel",
+          "cuda",
+          "-hwaccel_output_format",
+          "cuda",
           "-i",
           "/path/to/video.mp4",
           "-y",
           "-filter_complex",
-          "[0:v]scale=1080:1920[0:video];[0:video]subtitles=subtitle.ass[1:video]",
+          "[0:v]scale_cuda=1080:1920[0:video];[0:video]hwdownload[2:video];[2:video]format=nv12[3:video];[3:video]subtitles=subtitle.ass[1:video];[1:video]hwupload_cuda[4:video]",
           "-map",
-          "[1:video]",
+          "[4:video]",
           "-map",
           "0:a",
           "-c:v",
@@ -819,12 +825,17 @@ describe.concurrent("genMergeAssMp4Command", () => {
 
         const command = await genMergeAssMp4Command(files, ffmpegOptions);
         const args = command._getArguments();
+        // 显式链路改造：硬解开启后不再因滤镜移除，弹幕前补 hwdownload，链尾显存内缩放直通编码器
         expect(args).toEqual([
+          "-hwaccel",
+          "cuda",
+          "-hwaccel_output_format",
+          "cuda",
           "-i",
           "/path/to/video.mp4",
           "-y",
           "-filter_complex",
-          "[0:v]subtitles=subtitle.ass[0:video];[0:video]hwupload_cuda,scale_cuda=1080:1920[1:video]",
+          "[0:v]hwdownload[2:video];[2:video]format=nv12[3:video];[3:video]subtitles=subtitle.ass[0:video];[0:video]hwupload_cuda,scale_cuda=1080:1920[1:video]",
           "-map",
           "[1:video]",
           "-map",
@@ -858,16 +869,17 @@ describe.concurrent("genMergeAssMp4Command", () => {
 
         const command = await genMergeAssMp4Command(files, ffmpegOptions);
         const args = command._getArguments();
+        // 显式链路改造：decode 开启时 QSV 解码帧已在显存，去掉链首 hwupload，零拷贝直通
         expect(args).toEqual([
-          "-init_hw_device",
-          "qsv=hw",
-          "-filter_hw_device",
-          "hw",
+          "-hwaccel",
+          "qsv",
+          "-hwaccel_output_format",
+          "qsv",
           "-i",
           "/path/to/video.mp4",
           "-y",
           "-filter_complex",
-          "[0:v]hwupload,scale_qsv=1080:1920[0:video]",
+          "[0:v]scale_qsv=1080:1920[0:video]",
           "-map",
           "[0:video]",
           "-map",
@@ -901,14 +913,19 @@ describe.concurrent("genMergeAssMp4Command", () => {
         const command = await genMergeAssMp4Command(files, ffmpegOptions);
         const args = command._getArguments();
 
+        // 显式链路改造：before 模式硬件缩放解锁，scale_qsv 在显存内完成，回内存跑弹幕后传回
         expect(args).toEqual([
+          "-hwaccel",
+          "qsv",
+          "-hwaccel_output_format",
+          "qsv",
           "-i",
           "/path/to/video.mp4",
           "-y",
           "-filter_complex",
-          "[0:v]scale=1080:1920[0:video];[0:video]subtitles=subtitle.ass[1:video]",
+          "[0:v]scale_qsv=1080:1920[0:video];[0:video]hwdownload[2:video];[2:video]format=nv12[3:video];[3:video]subtitles=subtitle.ass[1:video];[1:video]hwupload=extra_hw_frames=64[4:video]",
           "-map",
-          "[1:video]",
+          "[4:video]",
           "-map",
           "0:a",
           "-c:v",
@@ -939,16 +956,17 @@ describe.concurrent("genMergeAssMp4Command", () => {
 
         const command = await genMergeAssMp4Command(files, ffmpegOptions);
         const args = command._getArguments();
+        // 显式链路改造：硬解开启后不再因滤镜移除，弹幕前补 hwdownload，链尾显存内缩放直通编码器
         expect(args).toEqual([
-          "-init_hw_device",
-          "qsv=hw",
-          "-filter_hw_device",
-          "hw",
+          "-hwaccel",
+          "qsv",
+          "-hwaccel_output_format",
+          "qsv",
           "-i",
           "/path/to/video.mp4",
           "-y",
           "-filter_complex",
-          "[0:v]subtitles=subtitle.ass[0:video];[0:video]hwupload,scale_qsv=1080:1920[1:video]",
+          "[0:v]hwdownload[2:video];[2:video]format=nv12[3:video];[3:video]subtitles=subtitle.ass[0:video];[0:video]hwupload,scale_qsv=1080:1920[1:video]",
           "-map",
           "[1:video]",
           "-map",
@@ -1259,7 +1277,7 @@ describe.concurrent("ComplexFilter", () => {
       {
         filter: "drawtext",
         options:
-          "text='%{pts\\:localtime\\:1633831810\\:%Y-%m-%d %T}':fontcolor=white:fontsize=24:x=10:y=10",
+          "text='%{pts\\:localtime\\:1633831810\\:%Y-%m-%d %H\\\\\\:%M\\\\\\:%S}':fontcolor=white:fontsize=24:x=10:y=10",
         inputs: ["0:v"],
         outputs: "0:video",
       },
