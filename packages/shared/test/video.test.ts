@@ -1409,15 +1409,24 @@ describe("genMergeAssMp4Command 语音直播间自动分辨率", () => {
     expect(filter.indexOf(scale)).toBeLessThan(filter.indexOf("subtitles="));
   });
 
-  it("语音直播间：无弹幕时同样放大，不被封面尺寸上传", async () => {
+  it("手动转码（无弹幕无字幕）：不介入，与 webhook 未开启弹幕压制一致", async () => {
+    // 对应 转码页面不选弹幕文件 → taskApi.transcode → 纯转码
     const command = await genMergeAssMp4Command(
       { ...files, assFilePath: undefined },
       { encoder: "libx264", audioCodec: "copy" },
     );
-    const filter = getFilterValue(command._getArguments());
-    expect(filter).toBe(
-      `[0:v]scale=${VOICE_ROOM_TARGET_WIDTH}:${VOICE_ROOM_TARGET_HEIGHT}[0:video]`,
+    const args = command._getArguments();
+    expect(args).not.toContain("-filter_complex");
+  });
+
+  it("视频剪辑带字幕（cut 的 subtitlePath）：不属于弹幕压制，不放大", async () => {
+    const command = await genMergeAssMp4Command(
+      { ...files, assFilePath: undefined, subtitlePath: "/path/to/sub.srt" },
+      { encoder: "libx264", audioCodec: "copy" },
     );
+    const filter = getFilterValue(command._getArguments());
+    expect(filter).not.toContain("scale=");
+    expect(filter).toContain("subtitles=");
   });
 
   it("普通分辨率：不插入放大滤镜", async () => {
@@ -1485,6 +1494,29 @@ describe("genMergeAssMp4Command 语音直播间自动分辨率", () => {
     );
     const filter = getFilterValue(command._getArguments());
     expect(filter).toBe("[0:v]subtitles=/path/to/subtitle.ass[0:video]");
+  });
+
+  it("透传宽高优先于 ffprobe：burn 链路复用 readVideoMeta 结果", async () => {
+    // ffprobe 桩说这是普通视频，但透传说 256x256 → 应放大，证明走的是透传值
+    probe.resolution = "1920x1080";
+    const command = await genMergeAssMp4Command(
+      { ...files },
+      { encoder: "libx264", audioCodec: "copy" },
+      { videoWidth: 256, videoHeight: 256 },
+    );
+    const filter = getFilterValue(command._getArguments());
+    expect(filter).toContain(`scale=${VOICE_ROOM_TARGET_WIDTH}:${VOICE_ROOM_TARGET_HEIGHT}`);
+  });
+
+  it("透传普通宽高：不放大（即使 ffprobe 说是 256x256）", async () => {
+    probe.resolution = "256x256";
+    const command = await genMergeAssMp4Command(
+      { ...files },
+      { encoder: "libx264", audioCodec: "copy" },
+      { videoWidth: 1920, videoHeight: 1080 },
+    );
+    const filter = getFilterValue(command._getArguments());
+    expect(filter).not.toContain("scale=");
   });
 
   it("硬件缩放链路：nvenc 下放大走 scale_cuda 并在之后回内存叠字幕", async () => {

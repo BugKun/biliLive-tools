@@ -244,7 +244,11 @@ export const resolveVideoResolution = async (
   input: string,
 ): Promise<VoiceRoomResolution | null> => {
   try {
-    if (!input || !(await pathExists(input))) return null;
+    if (!input) return null;
+    if (!(await pathExists(input))) {
+      log.warn("视频文件不存在，跳过语音直播间识别", input);
+      return null;
+    }
     const { width, height } = await readVideoResolution(input);
     return resolveVoiceRoomResolution(width, height);
   } catch (error: any) {
@@ -984,6 +988,9 @@ export const genMergeAssMp4Command = async (
   options: {
     startTimestamp?: number;
     timestampFont?: string;
+    /** 调用方已探测到的源视频宽高，传入后不再额外跑一次 ffprobe */
+    videoWidth?: number;
+    videoHeight?: number;
   } = {
     // 视频录制开始的秒时间戳
     startTimestamp: 0,
@@ -1016,12 +1023,27 @@ export const genMergeAssMp4Command = async (
   let voiceRoomInfo: VoiceRoomResolution | null | undefined;
   const getVoiceRoomInfo = async (): Promise<VoiceRoomResolution | null> => {
     if (voiceRoomInfo !== undefined) return voiceRoomInfo;
-    // 用户已显式指定目标分辨率时不介入；流复制（copy）加滤镜会强制重编码，同样跳过
-    if (selectScaleMethod(ffmpegOptions) !== "none" || ffmpegOptions.encoder === "copy") {
+    // 与 webhook 的 config.danmu 语义保持一致：只有「弹幕压制」链路才会检测并自动放大，
+    // 纯转码/转封装（transcode，含手动转码页面不选弹幕文件的情况）一律按原始分辨率处理。
+    // 注意：视频剪辑 cut 传入的 subtitleFile 不属于弹幕压制，不在此范围内。
+    // 不介入的三种情况：
+    // 1. 非弹幕压制场景：没有弹幕文件；
+    // 2. 编码器为 copy 的纯转封装：scale 滤镜与 -c:v copy 在 ffmpeg 层面直接冲突（会报错），
+    //    强行放大等于整条转重编码，代价远超 copy 本身的轻量语义；
+    // 3. 用户已显式指定目标分辨率（预设勾选了重置分辨率并填了宽高）。
+    if (
+      !assFile ||
+      ffmpegOptions.encoder === "copy" ||
+      selectScaleMethod(ffmpegOptions) !== "none"
+    ) {
       voiceRoomInfo = null;
       return voiceRoomInfo;
     }
-    const result = await resolveVideoResolution(files.videoFilePath);
+    const result =
+      options.videoWidth && options.videoHeight
+        ? // burn 链路已经用 readVideoMeta 读过宽高，直接复用，省一次进程调用也避开路径解析差异
+          resolveVoiceRoomResolution(options.videoWidth, options.videoHeight)
+        : await resolveVideoResolution(files.videoFilePath);
     voiceRoomInfo = result;
     if (result?.isVoiceRoom) {
       log.info(
@@ -1290,6 +1312,9 @@ export const mergeAssMp4 = async (
     limitTime?: [] | [string, string];
     autoRun?: boolean;
     removeSubtitle?: boolean;
+    /** 调用方已探测到的源视频宽高（如 burn 已通过 readVideoMeta 读取），用于语音直播间识别 */
+    videoWidth?: number;
+    videoHeight?: number;
   } = {
     removeOrigin: false,
     startTimestamp: 0,
@@ -1326,6 +1351,8 @@ export const mergeAssMp4 = async (
   const command = await genMergeAssMp4Command(files, ffmpegOptions, {
     startTimestamp: startTimestamp,
     timestampFont: options.timestampFont,
+    videoWidth: options.videoWidth,
+    videoHeight: options.videoHeight,
   });
   log.debug("mergrAssMp4, command");
 
@@ -1748,6 +1775,9 @@ export const burn = async (
       startTimestamp,
       timestampFont,
       limitTime: options.limitTime,
+      // 复用上面 readVideoMeta 已读到的宽高，供语音直播间自动分辨率识别
+      videoWidth: width,
+      videoHeight: height,
     },
     options.ffmpegOptions,
   );
