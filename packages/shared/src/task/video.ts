@@ -1178,11 +1178,11 @@ export const genMergeAssMp4Command = async (
   }
 
   // 输入参数
-  if (assFile) {
-    if (files.hotProgressFilePath) {
-      command.input(files.hotProgressFilePath);
-    }
-  }
+  // 注意：高能进度条是第二个输入，必须等下面所有 inputOptions 都加完再注册。
+  // fluent-ffmpeg 的 inputOptions 只会挂到「最后注册的那个输入」上，若先注册进度条，
+  // -hwaccel/-ss/-to 会全部落到进度条输入：主视频走软解却被 prepend 了 hwdownload
+  // （报 auto_scale_0 无法转换），进度条反被硬件解码成显存帧喂给 colorkey
+  // （报 Failed to inject frame into filter network）
   // 切片
   if (ffmpegOptions.ss) {
     command.inputOptions(`-ss ${ffmpegOptions.ss}`);
@@ -1263,6 +1263,11 @@ export const genMergeAssMp4Command = async (
       command.inputOptions("-hwaccel qsv");
       command.inputOptions("-hwaccel_output_format qsv");
     }
+  }
+
+  // 高能进度条作为第二个输入，放在所有 inputOptions 之后注册，保证上面的输入选项都在主视频上
+  if (assFile && files.hotProgressFilePath) {
+    command.input(files.hotProgressFilePath);
   }
 
   // 构建最后的输出内容
@@ -1704,6 +1709,16 @@ export const burn = async (
   const { width, height } = videoStream || {};
   const duration = videoMeta.format.duration;
 
+  // 语音直播间：压制时会自动把画面放大到目标分辨率（见 getVoiceRoomInfo），
+  // 弹幕与高能进度条必须按放大后的尺寸生成，否则叠到放大后的画面上只有原尺寸那么一小块。
+  // 判定条件与压制侧保持一致：用户显式重置分辨率时不放大，按原始尺寸处理
+  const voiceRoom =
+    selectScaleMethod(options.ffmpegOptions) === "none"
+      ? resolveVoiceRoomResolution(width ?? 0, height ?? 0)
+      : null;
+  const burnWidth = voiceRoom?.isVoiceRoom ? voiceRoom.width : width;
+  const burnHeight = voiceRoom?.isVoiceRoom ? voiceRoom.height : height;
+
   // 弹幕转换
   if (subtitleFilePath.endsWith(".xml")) {
     if (await isEmptyDanmu(subtitleFilePath)) {
@@ -1712,9 +1727,9 @@ export const burn = async (
     const name = uuid();
     const danmaOptions = options.danmaOptions;
     // 开启跟随视频分辨率
-    if (danmaOptions.resolutionResponsive && width && height) {
-      danmaOptions.resolution[0] = width;
-      danmaOptions.resolution[1] = height;
+    if (danmaOptions.resolutionResponsive && burnWidth && burnHeight) {
+      danmaOptions.resolution[0] = burnWidth;
+      danmaOptions.resolution[1] = burnHeight;
     }
     const task = await convertXml2Ass(
       {
@@ -1745,7 +1760,7 @@ export const burn = async (
     const hotProgressOptions = options.hotProgressOptions;
     const task = await genHotProgress(files.subtitleFilePath, {
       ...hotProgressOptions,
-      width,
+      width: burnWidth,
       duration,
     });
     await promiseTask(task);

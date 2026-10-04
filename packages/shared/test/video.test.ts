@@ -1538,4 +1538,39 @@ describe("genMergeAssMp4Command 语音直播间自动分辨率", () => {
     expect(downloadIdx).toBeGreaterThan(-1);
     expect(downloadIdx).toBeLessThan(subtitlesIdx);
   });
+
+  it("高能进度条+硬件解码：输入选项必须挂在主视频上，而不是进度条上", async () => {
+    // 回归：fluent-ffmpeg 的 inputOptions 只作用于「最后注册的输入」。
+    // 之前进度条先注册，导致 -hwaccel/-ss 全落到进度条输入：主视频软解却被 prepend 了
+    // hwdownload（auto_scale_0 转换失败），进度条反被硬解成显存帧喂给 colorkey
+    const command = await genMergeAssMp4Command(
+      { ...files, hotProgressFilePath: "/path/to/hotprogress.mp4" },
+      {
+        encoder: "hevc_nvenc",
+        audioCodec: "copy",
+        decode: true,
+        ss: "100",
+      },
+    );
+    const args = command._getArguments();
+    const videoIdx = args.indexOf("/path/to/video.mp4");
+    const hotIdx = args.indexOf("/path/to/hotprogress.mp4");
+    const hwaccelIdx = args.indexOf("-hwaccel");
+    const ssIdx = args.indexOf("-ss");
+
+    expect(videoIdx).toBeGreaterThan(-1);
+    expect(hotIdx).toBeGreaterThan(videoIdx);
+    // 硬件解码参数在主视频 -i 之前
+    expect(hwaccelIdx).toBeGreaterThan(-1);
+    expect(hwaccelIdx).toBeLessThan(videoIdx);
+    // 切片参数同样在主视频 -i 之前
+    expect(ssIdx).toBeGreaterThan(-1);
+    expect(ssIdx).toBeLessThan(videoIdx);
+
+    const filter = getFilterValue(args);
+    expect(filter).toContain(`scale=${VOICE_ROOM_TARGET_WIDTH}:${VOICE_ROOM_TARGET_HEIGHT}`);
+    // hwdownload 作用于主视频输入；进度条仍走软解喂 CPU 的 colorkey
+    expect(filter.startsWith("[0:v]hwdownload")).toBe(true);
+    expect(filter).toContain("[1]colorkey=black:0.1:0.1");
+  });
 });
