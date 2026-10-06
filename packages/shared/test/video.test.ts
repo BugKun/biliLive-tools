@@ -7,6 +7,7 @@ import {
   ComplexFilter,
   isVoiceRoomResolution,
   resolveVoiceRoomResolution,
+  selectHwDownloadFormat,
   VOICE_ROOM_VIDEO_WIDTH,
   VOICE_ROOM_VIDEO_HEIGHT,
   VOICE_ROOM_TARGET_WIDTH,
@@ -16,7 +17,8 @@ import type { FfmpegOptions, VideoCodec } from "@biliLive-tools/types";
 
 // ffprobe 探测桩：默认返回普通分辨率，语音直播间用例内部改成 256x256
 const probe = vi.hoisted(() => ({
-  resolution: "1920x1080",
+  // csv 输出：width,height,pix_fmt
+  stream: "1920,1080,yuv420p",
   fail: false,
   // 默认当作文件不存在，避免与分辨率无关的老用例走一次无意义的探测
   exists: false,
@@ -28,9 +30,9 @@ vi.mock("../src/utils/index.js", async (importOriginal) => {
     ...actual,
     pathExists: async () => probe.exists,
     executeCommand: async (command: string) => {
-      if (String(command).includes("-show_entries stream=width,height")) {
+      if (String(command).includes("-show_entries stream=width,height,pix_fmt")) {
         if (probe.fail) throw new Error("ffprobe failed");
-        return { stdout: probe.resolution, stderr: "" };
+        return { stdout: probe.stream, stderr: "" };
       }
       return actual.executeCommand(command);
     },
@@ -1366,7 +1368,7 @@ describe("genMergeAssMp4Command 语音直播间自动分辨率", () => {
   };
 
   beforeEach(() => {
-    probe.resolution = "256x256";
+    probe.stream = "256,256,yuv420p";
     probe.fail = false;
     probe.exists = true;
     // getBinPath 依赖容器，测试环境未初始化，这里只让它能拿到 ffprobe 路径
@@ -1376,7 +1378,7 @@ describe("genMergeAssMp4Command 语音直播间自动分辨率", () => {
     } as any);
   });
   afterEach(() => {
-    probe.resolution = "1920x1080";
+    probe.stream = "1920,1080,yuv420p";
     probe.exists = false;
     vi.restoreAllMocks();
   });
@@ -1430,7 +1432,7 @@ describe("genMergeAssMp4Command 语音直播间自动分辨率", () => {
   });
 
   it("普通分辨率：不插入放大滤镜", async () => {
-    probe.resolution = "1920x1080";
+    probe.stream = "1920,1080,yuv420p";
     const command = await genMergeAssMp4Command(
       { ...files },
       { encoder: "libx264", audioCodec: "copy" },
@@ -1498,7 +1500,7 @@ describe("genMergeAssMp4Command 语音直播间自动分辨率", () => {
 
   it("透传宽高优先于 ffprobe：burn 链路复用 readVideoMeta 结果", async () => {
     // ffprobe 桩说这是普通视频，但透传说 256x256 → 应放大，证明走的是透传值
-    probe.resolution = "1920x1080";
+    probe.stream = "1920,1080,yuv420p";
     const command = await genMergeAssMp4Command(
       { ...files },
       { encoder: "libx264", audioCodec: "copy" },
@@ -1509,7 +1511,7 @@ describe("genMergeAssMp4Command 语音直播间自动分辨率", () => {
   });
 
   it("透传普通宽高：不放大（即使 ffprobe 说是 256x256）", async () => {
-    probe.resolution = "256x256";
+    probe.stream = "256,256,yuv420p";
     const command = await genMergeAssMp4Command(
       { ...files },
       { encoder: "libx264", audioCodec: "copy" },
@@ -1572,5 +1574,157 @@ describe("genMergeAssMp4Command 语音直播间自动分辨率", () => {
     // hwdownload 作用于主视频输入；进度条仍走软解喂 CPU 的 colorkey
     expect(filter.startsWith("[0:v]hwdownload")).toBe(true);
     expect(filter).toContain("[1]colorkey=black:0.1:0.1");
+  });
+
+  it("关闭语音直播间自动放大开关：256x256 不再放大", async () => {
+    const command = await genMergeAssMp4Command(
+      { ...files },
+      { encoder: "libx264", audioCodec: "copy", voiceRoomAutoScale: false },
+    );
+    const filter = getFilterValue(command._getArguments());
+    expect(filter).not.toContain("scale=");
+    expect(filter).toContain("subtitles=");
+  });
+
+  it("未设置开关字段时默认开启（存量预设兼容）", async () => {
+    const command = await genMergeAssMp4Command(
+      { ...files },
+      { encoder: "libx264", audioCodec: "copy" },
+    );
+    const filter = getFilterValue(command._getArguments());
+    expect(filter).toContain(`scale=${VOICE_ROOM_TARGET_WIDTH}:${VOICE_ROOM_TARGET_HEIGHT}`);
+  });
+});
+
+describe("hwdownload 下载格式决策", () => {
+  it("10bit 源像素格式返回 p010le", () => {
+    expect(selectHwDownloadFormat("yuv420p10le")).toBe("p010le");
+    expect(selectHwDownloadFormat("yuv420p10be")).toBe("p010le");
+    expect(selectHwDownloadFormat("p010le")).toBe("p010le");
+  });
+  it("8bit 与未知像素格式返回 nv12", () => {
+    expect(selectHwDownloadFormat("yuv420p")).toBe("nv12");
+    expect(selectHwDownloadFormat("nv12")).toBe("nv12");
+    expect(selectHwDownloadFormat(undefined)).toBe("nv12");
+    expect(selectHwDownloadFormat("")).toBe("nv12");
+    expect(selectHwDownloadFormat("some_unknown_fmt")).toBe("nv12");
+  });
+});
+
+describe("genMergeAssMp4Command hwdownload 下载格式", () => {
+  const files = {
+    videoFilePath: "/path/to/video.mp4",
+    assFilePath: "/path/to/subtitle.ass",
+    outputPath: "/path/to/output.mp4",
+    hotProgressFilePath: undefined,
+  };
+
+  beforeEach(() => {
+    probe.stream = "1920,1080,yuv420p";
+    probe.fail = false;
+    probe.exists = true;
+    vi.spyOn(appConfig, "getAll").mockReturnValue({
+      customExecPath: true,
+      ffprobePath: "ffprobe",
+    } as any);
+  });
+  afterEach(() => {
+    probe.stream = "1920,1080,yuv420p";
+    probe.exists = false;
+    vi.restoreAllMocks();
+  });
+
+  it("10bit 源 + nvenc 硬解 + CPU 滤镜：下载格式用 p010le", async () => {
+    probe.stream = "1920,1080,yuv420p10le";
+    const command = await genMergeAssMp4Command(
+      { ...files },
+      {
+        encoder: "hevc_nvenc",
+        audioCodec: "copy",
+        decode: true,
+      },
+    );
+    const filter = getFilterValue(command._getArguments());
+    expect(filter).toContain("hwdownload");
+    expect(filter).toContain("format=p010le");
+    expect(filter).not.toContain("format=nv12");
+  });
+
+  it("8bit 源 + nvenc 硬解 + CPU 滤镜：下载格式维持 nv12（回归）", async () => {
+    const command = await genMergeAssMp4Command(
+      { ...files },
+      {
+        encoder: "hevc_nvenc",
+        audioCodec: "copy",
+        decode: true,
+      },
+    );
+    const filter = getFilterValue(command._getArguments());
+    expect(filter).toContain("format=nv12");
+    expect(filter).not.toContain("format=p010le");
+  });
+
+  it("透传 videoPixFmt 优先于 ffprobe：透传 10bit 走 p010le", async () => {
+    // ffprobe 桩说 8bit，透传说 10bit → 应 p010le，证明走的是透传值
+    const command = await genMergeAssMp4Command(
+      { ...files },
+      {
+        encoder: "hevc_nvenc",
+        audioCodec: "copy",
+        decode: true,
+      },
+      { videoWidth: 1920, videoHeight: 1080, videoPixFmt: "yuv420p10le" },
+    );
+    const filter = getFilterValue(command._getArguments());
+    expect(filter).toContain("format=p010le");
+  });
+
+  it("探测失败：下载格式降级为 nv12（回归）", async () => {
+    probe.fail = true;
+    const command = await genMergeAssMp4Command(
+      { ...files },
+      {
+        encoder: "hevc_nvenc",
+        audioCodec: "copy",
+        decode: true,
+      },
+    );
+    const filter = getFilterValue(command._getArguments());
+    expect(filter).toContain("format=nv12");
+  });
+
+  it("10bit 源 + qsv 硬解：下载格式用 p010le", async () => {
+    probe.stream = "1920,1080,yuv420p10le";
+    const command = await genMergeAssMp4Command(
+      { ...files },
+      {
+        encoder: "hevc_qsv",
+        audioCodec: "copy",
+        decode: true,
+      },
+    );
+    const filter = getFilterValue(command._getArguments());
+    expect(filter).toContain("format=p010le");
+  });
+
+  it("10bit 源 + 硬件缩放链路（scale_cuda 首滤镜）：缩放后下载同样保位深", async () => {
+    probe.stream = "1920,1080,yuv420p10le";
+    const command = await genMergeAssMp4Command(
+      { ...files },
+      {
+        encoder: "hevc_nvenc",
+        audioCodec: "copy",
+        decode: true,
+        resetResolution: true,
+        resolutionWidth: 1280,
+        resolutionHeight: 720,
+        scaleMethod: "before",
+        swsFlags: "auto",
+        hardwareScaleFilter: true,
+      },
+    );
+    const filter = getFilterValue(command._getArguments());
+    expect(filter.startsWith("[0:v]scale_cuda")).toBe(true);
+    expect(filter).toContain("format=p010le");
   });
 });

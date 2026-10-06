@@ -1071,12 +1071,19 @@ export interface FfmpegOptions {
   pkOptimize?: boolean;
   subtitleOptions?: SubtitleOptions;
   /**
-   * 压制字体文件：设置后弹幕/字幕（force_style + fontsdir）与时间戳（drawtext fontfile）
-   * 强制使用该字体文件渲染，不依赖系统字体（思源黑体，OFL 开源授权，规避微软雅黑版权问题）。
-   * 未设置时默认查找 ffmpeg 所在目录的 SourceHanSansSC-Normal.otf（存在才启用），
-   * 文件不存在则不注入，沿用系统字体匹配
+   * 压制字体文件（ffmpeg 配置页面的「压制字体」）：设置后弹幕/字幕（force_style + fontsdir）
+   * 与时间戳（drawtext fontfile）使用该字体文件渲染，不依赖系统字体，
+   * FontName 按字体文件内部 family 自动解析。
+   * 未设置时不注入字体，按 ass 样式名走系统字体匹配；
+   * 想脱离系统字体时可指向程序 ffmpeg 目录自带的 SourceHanSansSC-Normal.otf（思源黑体，OFL 开源授权）
    */
   fontFile?: string;
+  /**
+   * 语音直播间自动放大：识别到语音直播间封面分辨率（256x256）的录制时，
+   * 自动放大到目标分辨率（750x750）再压制弹幕，避免弹幕与画面同比拉伸模糊。
+   * 默认开启；遇到普通方形视频被误判放大时可关闭
+   */
+  voiceRoomAutoScale?: boolean;
 }
 
 export interface BiliupConfig {

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "fs-extra";
 
-import { genMergeAssMp4Command, burnFontFamily } from "../../src/task/video.js";
+import { genMergeAssMp4Command, burnFontFamily, readFontFamily } from "../../src/task/video.js";
 
 // fluent-ffmpeg 命令对象：取最终传给 ffmpeg 的参数
 const getArgs = (command: unknown): string[] => (command as any)._getArguments();
@@ -14,12 +14,50 @@ const getFilterValue = (args: string[]): string => {
   return args[index + 1] ?? "";
 };
 
+/**
+ * 构造带 name 表的最小 sfnt 字体（TTF/OTF 容器）：
+ * 仅含 nameID=1（family）的 Windows 平台记录，UTF-16BE 编码。
+ * 用于验证 readFontFamily 从字体文件内部解析 family 名
+ */
+const buildTestFont = (family: string): Buffer => {
+  const nameString = Buffer.from(family, "utf16le");
+  nameString.swap16(); // 转为 UTF-16BE
+  // name 表：format(2) count(2) stringOffset(2) + 1 条记录(12) + 字符串数据
+  const nameTable = Buffer.alloc(6 + 12 + nameString.length);
+  nameTable.writeUInt16BE(0, 0); // format
+  nameTable.writeUInt16BE(1, 2); // count
+  nameTable.writeUInt16BE(6 + 12, 4); // stringOffset
+  nameTable.writeUInt16BE(3, 6); // platformID: Windows
+  nameTable.writeUInt16BE(1, 8); // encodingID: Unicode BMP
+  nameTable.writeUInt16BE(0x409, 10); // languageID: en-US
+  nameTable.writeUInt16BE(1, 12); // nameID: family
+  nameTable.writeUInt16BE(nameString.length, 14);
+  nameTable.writeUInt16BE(0, 16); // 字符串相对 stringOffset 的偏移
+  nameString.copy(nameTable, 18);
+  // sfnt 头：version(4) numTables(2) searchRange(2) entrySelector(2) rangeShift(2) + 表目录记录(16)
+  const font = Buffer.alloc(12 + 16 + nameTable.length);
+  font.writeUInt32BE(0x00010000, 0); // TTF version
+  font.writeUInt16BE(1, 4); // numTables
+  font.write("name", 12, "latin1"); // 表标签
+  font.writeUInt32BE(0, 16); // checksum（解析不校验）
+  font.writeUInt32BE(12 + 16, 20); // 表偏移
+  font.writeUInt32BE(nameTable.length, 24); // 表长度
+  nameTable.copy(font, 28);
+  return font;
+};
+
 let fontTmpFile = "";
+let customFontFile = "";
 
 beforeAll(async () => {
-  fontTmpFile = path.join(os.tmpdir(), "blt-font-test", "SourceHanSansSC-Normal.otf");
-  await fs.ensureDir(path.dirname(fontTmpFile));
-  await fs.writeFile(fontTmpFile, ""); // 命令构建只检查存在性，不需要真实字体内容
+  const dir = path.join(os.tmpdir(), "blt-font-test");
+  await fs.ensureDir(dir);
+  // 空文件：命令构建只检查存在性；family 解析失败回退默认压制字体名
+  fontTmpFile = path.join(dir, "SourceHanSansSC-Normal.otf");
+  await fs.writeFile(fontTmpFile, "");
+  // 带真实 name 表的字体：验证 family 自动解析
+  customFontFile = path.join(dir, "custom-font.ttf");
+  await fs.writeFile(customFontFile, buildTestFont("My Custom Font"));
 });
 
 afterAll(async () => {
@@ -174,7 +212,8 @@ describe("genMergeAssMp4Command 硬件解码显式链路", () => {
     expect(subtitlesIdx).toBeLessThan(uploadIdx);
   });
 
-  it("指定字体文件：subtitles 注入 force_style(fontName)+fontsdir，drawtext 注入 fontfile", async () => {
+  it("显式指定字体文件：subtitles 注入 force_style(fontName)+fontsdir，drawtext 注入 fontfile", async () => {
+    // 空字体文件：family 解析失败回退默认压制字体名
     const command = await genMergeAssMp4Command(
       {
         videoFilePath: "input.mp4",
@@ -202,8 +241,55 @@ describe("genMergeAssMp4Command 硬件解码显式链路", () => {
     // 用户显式指定的字幕字体名应排在强制字体之后（后者覆盖前者）
   });
 
-  it("字体文件不存在（未显式指定）：不注入 fontsdir", async () => {
-    // 不传 fontFile，且 getBinPath 依赖容器（测试环境未初始化），resolveBurnFontFile 应安全返回 undefined
+  it("自定义字体文件：FontName 从字体文件内部 family 自动解析", async () => {
+    const command = await genMergeAssMp4Command(
+      {
+        videoFilePath: "input.mp4",
+        assFilePath: "danmu.ass",
+        outputPath: "output.mp4",
+        hotProgressFilePath: undefined,
+      },
+      {
+        encoder: "libx264",
+        bitrateControl: "CRF",
+        crf: 23,
+        audioCodec: "copy",
+        fontFile: customFontFile,
+      },
+    );
+    const filter = getFilterValue(getArgs(command));
+    expect(filter).toContain("FontName=My Custom Font");
+    expect(filter).toContain("fontsdir=");
+  });
+
+  it("readFontFamily：解析 sfnt name 表的 family 名，非法字体返回 undefined", () => {
+    expect(readFontFamily(customFontFile)).toBe("My Custom Font");
+    expect(readFontFamily(fontTmpFile)).toBeUndefined();
+  });
+
+  it("配置的字体文件不存在：跳过字体注入", async () => {
+    const command = await genMergeAssMp4Command(
+      {
+        videoFilePath: "input.mp4",
+        assFilePath: "danmu.ass",
+        outputPath: "output.mp4",
+        hotProgressFilePath: undefined,
+      },
+      {
+        encoder: "libx264",
+        bitrateControl: "CRF",
+        crf: 23,
+        audioCodec: "copy",
+        fontFile: path.join(os.tmpdir(), "blt-font-test", "missing.otf"),
+      },
+    );
+    const filter = getFilterValue(getArgs(command));
+    expect(filter).toContain("subtitles=");
+    expect(filter).not.toContain("fontsdir=");
+    expect(filter).not.toContain("force_style=");
+  });
+
+  it("未配置字体文件：不注入字体，按 ass 样式名走系统字体（回归）", async () => {
     const command = await genMergeAssMp4Command(
       {
         videoFilePath: "input.mp4",

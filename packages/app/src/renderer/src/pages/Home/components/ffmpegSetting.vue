@@ -369,6 +369,45 @@
 
       <n-form-item>
         <template #label>
+          <Tip text="语音直播间">
+            识别到语音直播间（电台）封面分辨率（256x256）的录制时，自动放大画面后再压制弹幕，避免弹幕和画面同比拉伸模糊。<br />
+            普通方形视频被误判放大时可关闭
+          </Tip>
+        </template>
+        <n-checkbox
+          :checked="ffmpegOptions.config.voiceRoomAutoScale ?? true"
+          @update:checked="(value) => (ffmpegOptions.config.voiceRoomAutoScale = value)"
+        />
+      </n-form-item>
+
+      <n-form-item>
+        <template #label>
+          <Tip text="压制字体">
+            显式指定弹幕/时间戳渲染使用的字体文件，不依赖系统字体（Docker/服务器等无字体环境推荐设置），字体名从文件内部自动读取。<br />
+            未设置时按样式名匹配系统字体；想用内置思源黑体，可选择程序 ffmpeg 目录下的
+            SourceHanSansSC-Normal.otf（OFL 开源授权）
+          </Tip>
+        </template>
+        <n-input
+          v-model:value="ffmpegOptions.config.fontFile"
+          placeholder="未设置则使用系统字体"
+          clearable
+          :input-props="{ spellcheck: 'false' }"
+        />
+        <n-icon
+          style="margin-left: 10px"
+          size="24"
+          class="pointer"
+          title="选择字体文件"
+          v-if="!isWeb"
+          @click="selectFontFile"
+        >
+          <FolderOpenOutline />
+        </n-icon>
+      </n-form-item>
+
+      <n-form-item>
+        <template #label>
           <Tip text="编码线程数"> 默认值为-1，由ffmpeg自动选择 </Tip>
         </template>
         <n-input-number
@@ -463,9 +502,10 @@
 </template>
 
 <script setup lang="ts">
-import { HelpCircleOutline } from "@vicons/ionicons5";
+import { FolderOpenOutline, HelpCircleOutline } from "@vicons/ionicons5";
 import { useConfirm, useBreakpoints } from "@renderer/hooks";
 import { uuid } from "@renderer/utils";
+import { showFileDialog } from "@renderer/utils/fileSystem";
 import { cloneDeep } from "lodash-es";
 import { useFfmpegPreset, useAppConfig } from "@renderer/stores";
 import { ffmpegPresetApi } from "@renderer/apis";
@@ -478,9 +518,17 @@ const confirmDialog = useConfirm();
 const { ffmpegOptions: options } = storeToRefs(useFfmpegPreset());
 const { getPresetOptions } = useFfmpegPreset();
 const { isMobile } = useBreakpoints();
+const isWeb = computed(() => window.isWeb);
 const labelWidth = computed(() => {
   return isMobile.value ? "90px" : "120px";
 });
+
+// 选择压制字体文件（otf/ttf/ttc），libass/drawtext 均可直接使用
+const selectFontFile = async () => {
+  const files = await showFileDialog({ extensions: ["otf", "ttf", "ttc"], multi: false });
+  if (!files || !files[0]) return;
+  ffmpegOptions.value.config.fontFile = files[0];
+};
 
 const emits = defineEmits<{
   (event: "change", value: FfmpegPreset): void;

@@ -40,6 +40,8 @@ const commonPresetParams: {
   timestampFormat: string;
   vf: string;
   pkOptimize: boolean;
+  /** 语音直播间自动放大：默认开启，误判时可关闭 */
+  voiceRoomAutoScale: boolean;
 } = {
   resetResolution: false,
   fps: undefined,
@@ -63,6 +65,7 @@ const commonPresetParams: {
   // 默认不用 %T：部分 ffmpeg 构建的 strftime 不支持 %T（时间戳不渲染），%H:%M:%S 与其语义等价
   timestampFormat: "%Y-%m-%d %H:%M:%S",
   pkOptimize: false,
+  voiceRoomAutoScale: true,
 };
 
 const baseFfmpegPresets: CommonPresetType<FfmpegOptions>[] = [

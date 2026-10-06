@@ -203,14 +203,35 @@ export interface VoiceRoomResolution {
   height: number;
   /** `${width}x${height}` */
   resolution: string;
+  /** ffprobe 探测到的源像素格式（如 yuv420p/yuv420p10le），供 hwdownload 下载格式决策 */
+  pixFmt?: string;
 }
+
+/** 硬件解码显存帧下载回内存时的目标像素格式 */
+export type HwDownloadFormat = "nv12" | "p010le";
+
+/**
+ * hwdownload 下载格式的决策：10bit 源（yuv420p10le/p010le）用 p010le 保住位深，其余用 nv12。
+ * 8bit 源行为与旧版一致；探测失败（未知）时 nv12 与旧版一致。
+ * 8bit-only 编码器（如 h264_nvenc）消费 p010le 时，ffmpeg 会在滤镜与编码器之间自动转换，
+ * 无需按编码器特判
+ */
+export const selectHwDownloadFormat = (pixFmt?: string): HwDownloadFormat => {
+  return pixFmt === "yuv420p10le" || pixFmt === "yuv420p10be" || pixFmt === "p010le"
+    ? "p010le"
+    : "nv12";
+};
 
 /** 是否为语音直播间的录制分辨率 */
 export const isVoiceRoomResolution = (width: unknown, height: unknown): boolean =>
   width === VOICE_ROOM_VIDEO_WIDTH && height === VOICE_ROOM_VIDEO_HEIGHT;
 
 /** 由原始宽高推导压制分辨率：语音直播间放大到目标分辨率，其余保持原样 */
-export const resolveVoiceRoomResolution = (width: number, height: number): VoiceRoomResolution => {
+export const resolveVoiceRoomResolution = (
+  width: number,
+  height: number,
+  pixFmt?: string,
+): VoiceRoomResolution => {
   const isVoiceRoom = isVoiceRoomResolution(width, height);
   const targetWidth = isVoiceRoom ? VOICE_ROOM_TARGET_WIDTH : width;
   const targetHeight = isVoiceRoom ? VOICE_ROOM_TARGET_HEIGHT : height;
@@ -220,20 +241,42 @@ export const resolveVoiceRoomResolution = (width: number, height: number): Voice
     width: targetWidth,
     height: targetHeight,
     resolution: `${targetWidth}x${targetHeight}`,
+    pixFmt,
   };
 };
 
-/** 读取视频首条视频流的分辨率 */
-export const readVideoResolution = async (input: string): Promise<Resolution> => {
+/** 读取视频首条视频流的分辨率与像素格式（csv 输出形如 "1920,1080,yuv420p"） */
+export const readVideoStreamInfo = async (
+  input: string,
+): Promise<{ width: number; height: number; pixFmt?: string }> => {
   const { ffprobePath } = getBinPath();
   const { stdout } = await executeCommand(
-    `${ffprobePath} -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "${input}"`,
+    `${ffprobePath} -v error -select_streams v:0 -show_entries stream=width,height,pix_fmt -of csv=p=0 "${input}"`,
   );
-  const [width, height] = String(stdout).trim().split("x").map(Number);
-  if (!Number.isFinite(width) || !Number.isFinite(height)) {
+  const [width, height, pixFmt] = String(stdout)
+    .trim()
+    .split(",")
+    .map((s) => s.trim());
+  if (!Number.isFinite(Number(width)) || !Number.isFinite(Number(height))) {
     throw new Error(`无法解析视频分辨率: ${stdout}`);
   }
-  return { width, height };
+  return { width: Number(width), height: Number(height), pixFmt: pixFmt || undefined };
+};
+
+/**
+ * 探测源视频流信息（分辨率 + 像素格式），失败返回 null。
+ * 供语音直播间识别与 hwdownload 下载格式决策共用
+ */
+export const probeVideoStream = async (
+  input: string,
+): Promise<{ width: number; height: number; pixFmt?: string } | null> => {
+  try {
+    if (!input || !(await pathExists(input))) return null;
+    return await readVideoStreamInfo(input);
+  } catch (error: any) {
+    log.warn("视频流信息探测失败", input, error?.message ?? error);
+    return null;
+  }
 };
 
 /**
@@ -249,8 +292,8 @@ export const resolveVideoResolution = async (
       log.warn("视频文件不存在，跳过语音直播间识别", input);
       return null;
     }
-    const { width, height } = await readVideoResolution(input);
-    return resolveVoiceRoomResolution(width, height);
+    const { width, height, pixFmt } = await readVideoStreamInfo(input);
+    return resolveVoiceRoomResolution(width, height, pixFmt);
   } catch (error: any) {
     log.warn("视频分辨率探测失败，跳过语音直播间识别", input, error?.message ?? error);
     return null;
@@ -316,35 +359,89 @@ export const selectScaleMethod = (
 };
 
 /**
- * 压制字体的 family 名：必须与字体文件内部的 family 一致
- * （SourceHanSansSC-Normal.otf 对应 Source Han Sans SC Normal，思源黑体，OFL 开源授权，规避微软雅黑版权问题）
+ * 压制字体的兜底 family 名（思源黑体 Normal，与 bin/SourceHanSansSC-Normal.otf 内部 family 一致）：
+ * 指定字体文件解析不出 family 时回退使用
  */
 export const burnFontFamily = "Source Han Sans SC Normal";
 
 /**
- * 解析压制字体文件：
- * 1. ffmpegOptions.fontFile 显式指定
- * 2. 未指定时默认取 ffmpeg 所在目录的 SourceHanSansSC-Normal.otf（存在才启用）
- * 文件不存在时返回 undefined，不注入字体（字幕按 ass 样式名走系统字体匹配）
+ * 解析 sfnt 容器字体（ttf/otf）name 表中的 family 名（nameID=1）。
+ * force_style 的 FontName 必须与字体文件内部 family 一致才能命中，
+ * 用户可指定任意字体文件，故从文件内部读取而非硬编码。
+ * 解析失败返回 undefined（调用方回退到默认压制字体名）
+ */
+export const readFontFamily = (fontPath: string): string | undefined => {
+  try {
+    const buf = fs.readFileSync(fontPath);
+    if (buf.length < 12) return undefined;
+    const numTables = buf.readUInt16BE(4);
+    // 表目录从 12 开始，每项 16 字节（tag/checksum/offset/length）
+    for (let i = 0; i < numTables; i++) {
+      const recordOffset = 12 + i * 16;
+      if (recordOffset + 16 > buf.length) return undefined;
+      if (buf.toString("latin1", recordOffset, recordOffset + 4) !== "name") continue;
+      const tableOffset = buf.readUInt32BE(recordOffset + 8);
+      if (tableOffset + 6 > buf.length) return undefined;
+      // name 表头：format(2) count(2) stringOffset(2)，之后每条记录 12 字节
+      const count = buf.readUInt16BE(tableOffset + 2);
+      const stringOffset = tableOffset + buf.readUInt16BE(tableOffset + 4);
+      let macFamily: string | undefined;
+      for (let j = 0; j < count; j++) {
+        const record = tableOffset + 6 + j * 12;
+        if (record + 12 > buf.length) return undefined;
+        const platformID = buf.readUInt16BE(record);
+        const nameID = buf.readUInt16BE(record + 6);
+        const length = buf.readUInt16BE(record + 8);
+        const offset = buf.readUInt16BE(record + 10);
+        if (nameID !== 1) continue;
+        const start = stringOffset + offset;
+        if (length % 2 !== 0 || start + length > buf.length) continue;
+        if (platformID === 3) {
+          // Windows 平台：UTF-16BE，字节序交换后按 utf16le 解码
+          const str = Buffer.from(buf.subarray(start, start + length));
+          str.swap16();
+          const family = str.toString("utf16le").trim();
+          if (family) return family;
+        } else if (platformID === 1 && !macFamily) {
+          // Mac 平台：MacRoman，latin1 近似解码
+          macFamily = buf.toString("latin1", start, start + length).trim();
+        }
+      }
+      return macFamily;
+    }
+    return undefined;
+  } catch (error: any) {
+    log.warn("压制字体 family 解析失败", fontPath, error?.message ?? error);
+    return undefined;
+  }
+};
+
+/**
+ * 解析压制字体文件：仅使用显式配置的 ffmpegOptions.fontFile（ffmpeg 配置页面的「压制字体」）。
+ * 未配置或文件不存在时不注入字体，弹幕/字幕按 ass 样式名走系统字体匹配。
+ * 想脱离系统字体（如打包环境无字体）时显式指定，例如程序 ffmpeg 目录自带的
+ * SourceHanSansSC-Normal.otf（思源黑体，OFL 开源授权）
  */
 export const resolveBurnFontFile = (fontFile?: string): string | undefined => {
-  let file: string | undefined = fontFile?.trim();
-  if (!file) {
-    try {
-      const { ffmpegPath } = getBinPath();
-      file = join(path.dirname(ffmpegPath), "SourceHanSansSC-Normal.otf");
-    } catch (e) {
-      return undefined;
-    }
-  }
-  if (!file || !fs.existsSync(file)) {
-    if (fontFile) {
-      log.warn(`压制字体文件不存在，跳过字体注入: ${file}`);
-    }
+  const file = fontFile?.trim();
+  if (!file) return undefined;
+  if (!fs.existsSync(file)) {
+    log.warn(`压制字体文件不存在，跳过字体注入: ${file}`);
     return undefined;
   }
   return file;
 };
+
+/** 显存内缩放滤镜（帧不出显存）：下载/上传判断共用的名单 */
+const HW_SCALE_FILTERS: readonly string[] = [
+  "hwupload_cuda,scale_cuda",
+  "scale_cuda",
+  "hwupload,scale_qsv",
+  "scale_qsv",
+];
+
+/** 显存⇄内存传输滤镜对的长度（hwdownload + format） */
+const HW_TRANSFER_PAIR_LENGTH = 2;
 
 export class ComplexFilter {
   private filters: {
@@ -552,22 +649,23 @@ export class ComplexFilter {
   // ============ 硬件解码显式链路 ============
   // 硬件解码后帧常驻显存，而弹幕/字幕/时间戳等 CPU 滤镜（libass/drawtext 只能跑 CPU）
   // 必须在内存帧上运行。以下方法在 CPU/显存边界自动补传输滤镜：
-  //   显存→内存：hwdownload + format=nv12
+  //   显存→内存：hwdownload + format（nv12 或 p010le，由源像素格式决定是否保 10bit）
   //   内存→显存：hwupload（交硬件编码器零拷贝编码）
 
-  /** 在指定滤镜之后插入显存帧下载对（hwdownload + format=nv12），并改写后续滤镜的输入流 */
-  private insertPairAfter(index: number) {
+  /** 在指定滤镜之后插入显存帧下载对（hwdownload + format），并改写后续滤镜的输入流 */
+  private insertPairAfter(index: number, downloadFormat: HwDownloadFormat = "nv12") {
     const target = this.filters[index];
     const scaleOut = target.outputs!;
+    // 先取插入点之后滤镜的引用再 splice：插入后对象身份不变，无需索引运算
+    const next = this.filters[index + 1];
     const s1 = this.getNextStream();
     const s2 = this.getNextStream();
     this.filters.splice(
       index + 1,
       0,
       { filter: "hwdownload", options: "", inputs: [scaleOut], outputs: s1 },
-      { filter: "format", options: "nv12", inputs: [s1], outputs: s2 },
+      { filter: "format", options: downloadFormat, inputs: [s1], outputs: s2 },
     );
-    const next = this.filters[index + 3];
     if (next) {
       // 只替换引用了缩放输出流的输入，保留其他输入（如 overlay 的第二路输入）
       next.inputs = (next.inputs as string[]).map((s) => (s === scaleOut ? s2 : s));
@@ -577,7 +675,7 @@ export class ComplexFilter {
   }
 
   /** 链首插入显存帧下载对：硬件解码后第一个滤镜若为 CPU 滤镜，需先把显存帧拉回内存 */
-  prependHwDownload() {
+  prependHwDownload(downloadFormat: HwDownloadFormat = "nv12") {
     const first = this.filters[0];
     if (!first) return;
     const source = ((first.inputs as string[]) ?? ["0:v"])[0] ?? "0:v";
@@ -585,7 +683,7 @@ export class ComplexFilter {
     const s2 = this.getNextStream();
     this.filters.unshift(
       { filter: "hwdownload", options: "", inputs: [source], outputs: s1 },
-      { filter: "format", options: "nv12", inputs: [s1], outputs: s2 },
+      { filter: "format", options: downloadFormat, inputs: [s1], outputs: s2 },
     );
     first.inputs = [s2];
   }
@@ -594,20 +692,14 @@ export class ComplexFilter {
    * 显存内滤镜（hwupload+scale / scale_cuda / scale_qsv，输出显存帧）之后若还有 CPU 滤镜，
    * 自动在其后补显存帧下载对。链尾的显存内滤镜不处理（直接交硬件编码器）
    */
-  insertHwDownloadAfterHwScales() {
-    const hwScaleFilters = [
-      "hwupload_cuda,scale_cuda",
-      "scale_cuda",
-      "hwupload,scale_qsv",
-      "scale_qsv",
-    ];
+  insertHwDownloadAfterHwScales(downloadFormat: HwDownloadFormat = "nv12") {
     for (let i = 0; i < this.filters.length; i++) {
-      if (!hwScaleFilters.includes(this.filters[i].filter)) continue;
+      if (!HW_SCALE_FILTERS.includes(this.filters[i].filter)) continue;
       const next = this.filters[i + 1];
       if (!next) break; // 链尾输出显存帧，直接编码
       if (next.filter === "hwdownload") continue; // 已有下载
-      this.insertPairAfter(i);
-      i += 2;
+      this.insertPairAfter(i, downloadFormat);
+      i += HW_TRANSFER_PAIR_LENGTH;
     }
   }
 
@@ -615,11 +707,7 @@ export class ComplexFilter {
   appendHwUpload(uploadFilter: "hwupload_cuda" | "hwupload", options = "") {
     const last = this.filters[this.filters.length - 1];
     if (!last) return;
-    if (
-      ["hwupload_cuda,scale_cuda", "scale_cuda", "hwupload,scale_qsv", "scale_qsv"].includes(
-        last.filter,
-      )
-    ) {
+    if (HW_SCALE_FILTERS.includes(last.filter)) {
       return;
     }
     const s = this.getNextStream();
@@ -991,6 +1079,8 @@ export const genMergeAssMp4Command = async (
     /** 调用方已探测到的源视频宽高，传入后不再额外跑一次 ffprobe */
     videoWidth?: number;
     videoHeight?: number;
+    /** 调用方已探测到的源视频像素格式（如 burn 已通过 readVideoMeta 读取），用于 hwdownload 格式决策 */
+    videoPixFmt?: string;
   } = {
     // 视频录制开始的秒时间戳
     startTimestamp: 0,
@@ -1018,41 +1108,64 @@ export const genMergeAssMp4Command = async (
     return commentTimestamp;
   }
 
-  // 语音直播间：录制画面只有封面大小（默认 256x256），识别到后压制时自动放大。
-  // 自定义 vf 中每出现一次 $origin 都会重建一遍默认滤镜，故探测结果按任务缓存，只走一次 ffprobe
+  // 源流探测缓存：语音直播间识别与 hwdownload 下载格式决策共用，
+  // 自定义 vf 中每出现一次 $origin 都会重建一遍默认滤镜，整个命令构建只跑一次 ffprobe
+  let sourceStream: { width: number; height: number; pixFmt?: string } | null | undefined;
+  const probeSourceStream = async () => {
+    if (sourceStream !== undefined) return sourceStream;
+    if (options.videoWidth && options.videoHeight) {
+      // burn 链路已经用 readVideoMeta 读过流信息，直接复用，省一次进程调用也避开路径解析差异
+      sourceStream = {
+        width: options.videoWidth,
+        height: options.videoHeight,
+        pixFmt: options.videoPixFmt,
+      };
+    } else {
+      sourceStream = await probeVideoStream(files.videoFilePath);
+    }
+    return sourceStream;
+  };
+
+  // 语音直播间：录制画面只有封面大小（默认 256x256），识别到后压制时自动放大
   let voiceRoomInfo: VoiceRoomResolution | null | undefined;
   const getVoiceRoomInfo = async (): Promise<VoiceRoomResolution | null> => {
     if (voiceRoomInfo !== undefined) return voiceRoomInfo;
     // 与 webhook 的 config.danmu 语义保持一致：只有「弹幕压制」链路才会检测并自动放大，
     // 纯转码/转封装（transcode，含手动转码页面不选弹幕文件的情况）一律按原始分辨率处理。
     // 注意：视频剪辑 cut 传入的 subtitleFile 不属于弹幕压制，不在此范围内。
-    // 不介入的三种情况：
+    // 不介入的情况：
     // 1. 非弹幕压制场景：没有弹幕文件；
     // 2. 编码器为 copy 的纯转封装：scale 滤镜与 -c:v copy 在 ffmpeg 层面直接冲突（会报错），
     //    强行放大等于整条转重编码，代价远超 copy 本身的轻量语义；
-    // 3. 用户已显式指定目标分辨率（预设勾选了重置分辨率并填了宽高）。
+    // 3. 用户已显式指定目标分辨率（预设勾选了重置分辨率并填了宽高）；
+    // 4. 用户在 ffmpeg 配置中关闭了「语音直播间自动放大」。
     if (
       !assFile ||
       ffmpegOptions.encoder === "copy" ||
-      selectScaleMethod(ffmpegOptions) !== "none"
+      selectScaleMethod(ffmpegOptions) !== "none" ||
+      ffmpegOptions.voiceRoomAutoScale === false
     ) {
       voiceRoomInfo = null;
       return voiceRoomInfo;
     }
-    const result =
-      options.videoWidth && options.videoHeight
-        ? // burn 链路已经用 readVideoMeta 读过宽高，直接复用，省一次进程调用也避开路径解析差异
-          resolveVoiceRoomResolution(options.videoWidth, options.videoHeight)
-        : await resolveVideoResolution(files.videoFilePath);
-    voiceRoomInfo = result;
-    if (result?.isVoiceRoom) {
+    const stream = await probeSourceStream();
+    voiceRoomInfo = stream
+      ? resolveVoiceRoomResolution(stream.width, stream.height, stream.pixFmt)
+      : null;
+    if (voiceRoomInfo?.isVoiceRoom) {
       log.info(
         "识别到语音直播间，自动修正压制分辨率",
         files.videoFilePath,
-        `${result.raw} -> ${result.resolution}`,
+        `${voiceRoomInfo.raw} -> ${voiceRoomInfo.resolution}`,
       );
     }
     return voiceRoomInfo;
+  };
+
+  // hwdownload 下载格式决策：源是 10bit 时保位深（p010le），透传值优先于 ffprobe
+  const getSourcePixFmt = async (): Promise<string | undefined> => {
+    if (options.videoPixFmt) return options.videoPixFmt;
+    return (await probeSourceStream())?.pixFmt;
   };
 
   async function addDefaultComplexFilter(scaleHardware: boolean = false) {
@@ -1061,10 +1174,15 @@ export const genMergeAssMp4Command = async (
     }
     const scaleMethod = selectScaleMethod(ffmpegOptions);
     const startTimestamp = await getDrawtextParams();
-    // 压制字体：显式 fontFile 或默认取 ffmpeg 所在目录的思源黑体文件，不存在则不注入
+    // 压制字体：仅显式配置 fontFile 时注入，未配置不干预（按 ass 样式名走系统字体）
     const burnFontFile = resolveBurnFontFile(ffmpegOptions.fontFile);
     const fontOptions = burnFontFile
-      ? { fontsdir: path.dirname(burnFontFile), family: burnFontFamily }
+      ? {
+          fontsdir: path.dirname(burnFontFile),
+          // FontName 必须与字体文件内部 family 一致才能命中 fontsdir 里的字体，
+          // 从文件内解析（用户可指定任意字体），解析失败回退默认压制字体名
+          family: readFontFamily(burnFontFile) ?? burnFontFamily,
+        }
       : undefined;
 
     // 语音直播间：先把画面放大到目标分辨率，再叠加弹幕/字幕（字幕按放大后的分辨率渲染才不会被拉糊）
@@ -1198,7 +1316,7 @@ export const genMergeAssMp4Command = async (
   // 原有零拷贝行为保留：无滤镜、或链上仅有显存内缩放时帧全程显存。
   // 新增：开启解码加速（ffmpegOptions.decode）时，存在 CPU 滤镜（弹幕/字幕/时间戳，
   // libass/drawtext 只能跑 CPU）不再移除硬件解码，改为显式链路——解码帧常驻显存，
-  // 在 CPU/显存边界自动补传输滤镜：hwdownload + format=nv12 回内存跑 CPU 滤镜，
+  // 在 CPU/显存边界自动补传输滤镜：hwdownload + format 回内存跑 CPU 滤镜（10bit 源保位深），
   // 处理完 hwupload 传回显存，交硬件编码器零拷贝编码
   const filters = complexFilter.getFilters();
   if (filters.length) {
@@ -1210,7 +1328,8 @@ export const genMergeAssMp4Command = async (
       first.filter = "scale_cuda";
       if (filters.length > 1) {
         // 缩放后还有滤镜：缩放输出回内存跑 CPU 滤镜，链尾传回显存
-        complexFilter.insertHwDownloadAfterHwScales();
+        const downloadFormat = selectHwDownloadFormat(await getSourcePixFmt());
+        complexFilter.insertHwDownloadAfterHwScales(downloadFormat);
         complexFilter.appendHwUpload("hwupload_cuda");
       }
     } else if (first.filter === "hwupload,scale_qsv") {
@@ -1225,7 +1344,8 @@ export const genMergeAssMp4Command = async (
         command.inputOptions("-filter_hw_device hw");
       }
       if (filters.length > 1) {
-        complexFilter.insertHwDownloadAfterHwScales();
+        const downloadFormat = selectHwDownloadFormat(await getSourcePixFmt());
+        complexFilter.insertHwDownloadAfterHwScales(downloadFormat);
         complexFilter.appendHwUpload("hwupload", "extra_hw_frames=64");
       }
     } else if (first.filter === "vpp_amf") {
@@ -1241,14 +1361,16 @@ export const genMergeAssMp4Command = async (
       if (hardware === "nvenc") {
         command.inputOptions("-hwaccel cuda");
         command.inputOptions("-hwaccel_output_format cuda");
-        complexFilter.prependHwDownload();
-        complexFilter.insertHwDownloadAfterHwScales();
+        const downloadFormat = selectHwDownloadFormat(await getSourcePixFmt());
+        complexFilter.prependHwDownload(downloadFormat);
+        complexFilter.insertHwDownloadAfterHwScales(downloadFormat);
         complexFilter.appendHwUpload("hwupload_cuda");
       } else if (hardware === "qsv") {
         command.inputOptions("-hwaccel qsv");
         command.inputOptions("-hwaccel_output_format qsv");
-        complexFilter.prependHwDownload();
-        complexFilter.insertHwDownloadAfterHwScales();
+        const downloadFormat = selectHwDownloadFormat(await getSourcePixFmt());
+        complexFilter.prependHwDownload(downloadFormat);
+        complexFilter.insertHwDownloadAfterHwScales(downloadFormat);
         complexFilter.appendHwUpload("hwupload", "extra_hw_frames=64");
       }
       // amf/videotoolbox 暂不支持滤镜链下的硬件解码，维持软解
@@ -1320,6 +1442,8 @@ export const mergeAssMp4 = async (
     /** 调用方已探测到的源视频宽高（如 burn 已通过 readVideoMeta 读取），用于语音直播间识别 */
     videoWidth?: number;
     videoHeight?: number;
+    /** 调用方已探测到的源视频像素格式（如 burn 已通过 readVideoMeta 读取），用于 hwdownload 格式决策 */
+    videoPixFmt?: string;
   } = {
     removeOrigin: false,
     startTimestamp: 0,
@@ -1358,6 +1482,7 @@ export const mergeAssMp4 = async (
     timestampFont: options.timestampFont,
     videoWidth: options.videoWidth,
     videoHeight: options.videoHeight,
+    videoPixFmt: options.videoPixFmt,
   });
   log.debug("mergrAssMp4, command");
 
@@ -1718,7 +1843,6 @@ export const burn = async (
       : null;
   const burnWidth = voiceRoom?.isVoiceRoom ? voiceRoom.width : width;
   const burnHeight = voiceRoom?.isVoiceRoom ? voiceRoom.height : height;
-
   // 弹幕转换
   if (subtitleFilePath.endsWith(".xml")) {
     if (await isEmptyDanmu(subtitleFilePath)) {
@@ -1790,9 +1914,10 @@ export const burn = async (
       startTimestamp,
       timestampFont,
       limitTime: options.limitTime,
-      // 复用上面 readVideoMeta 已读到的宽高，供语音直播间自动分辨率识别
+      // 复用上面 readVideoMeta 已读到的流信息，供语音直播间识别与 hwdownload 格式决策
       videoWidth: width,
       videoHeight: height,
+      videoPixFmt: videoStream?.pix_fmt,
     },
     options.ffmpegOptions,
   );
