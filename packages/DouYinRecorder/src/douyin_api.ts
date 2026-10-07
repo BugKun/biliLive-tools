@@ -180,6 +180,8 @@ async function getRoomInfoByUserWeb(
     throw new Error("userHTML页面没有正常加载" + String(res.data));
   }
   if (!res.data.includes("直播中")) {
+    // 这里不能返回 room: null，getRoomInfo 里会对 room 做 assert，
+    // 返回 null 会让"未开播"变成抛异常，状态检测就炸了
     return {
       living: false,
       isLiveRadio: false,
@@ -187,7 +189,12 @@ async function getRoomInfoByUserWeb(
       sec_uid: "",
       avatar: "",
       api: "userHTML",
-      room: null,
+      room: {
+        title: "",
+        cover: "",
+        id_str: "",
+        stream_url: null,
+      },
     };
   }
 
@@ -432,6 +439,7 @@ async function getRoomInfoByWeb(
 
 async function getRoomInfoByMobile(
   secUserId: string | number,
+  webRoomId: string,
   opts: {
     auth?: string;
   } = {},
@@ -443,11 +451,31 @@ async function getRoomInfoByMobile(
   if (typeof secUserId === "number") {
     throw new Error("Mobile API need secUserId string, please set uid field");
   }
+  // room_id 必须是真实的数字房间号，抖音服务端会校验，传占位值（例如 2）会直接返回 10011
+  if (!/^\d+$/.test(webRoomId)) {
+    console.error(
+      `[DouYin-mobile] invalid roomId "${webRoomId}", mobile API only accepts numeric room id`,
+    );
+    return {
+      living: false,
+      isLiveRadio: false,
+      nickname: "",
+      sec_uid: "",
+      avatar: "",
+      api: "mobile",
+      room: {
+        title: "",
+        cover: "",
+        id_str: "",
+        stream_url: null,
+      },
+    };
+  }
   const params: Record<any, any> = {
     app_id: 1128,
     live_id: 1,
     verifyFp: "",
-    room_id: 2,
+    room_id: webRoomId,
     type_id: 0,
     sec_user_id: secUserId,
   };
@@ -464,6 +492,29 @@ async function getRoomInfoByMobile(
 
   // @ts-ignore
   const room = res?.data?.data?.room;
+
+  if (res.data.status_code !== 0 || !room) {
+    // 抖音在参数非法时会返回 status_code 10011 且 data 中没有 room，
+    // 之前这里会被静默当成"未开播"，导致电台直播间拿不到流还查不出原因
+    console.error(
+      `[DouYin-mobile] request failed, status_code: ${res.data.status_code}, ` +
+        `data: ${JSON.stringify(res.data.data)}, roomId: ${webRoomId}`,
+    );
+    return {
+      living: false,
+      isLiveRadio: false,
+      nickname: "",
+      sec_uid: "",
+      avatar: "",
+      api: "mobile",
+      room: {
+        title: "",
+        cover: "",
+        id_str: "",
+        stream_url: null,
+      },
+    };
+  }
 
   console.log(`[DouYin-mobile] full room data:` + JSON.stringify(room));
 
@@ -523,7 +574,7 @@ export async function getRoomInfo(
   if (api === "webHTML") {
     data = await getRoomInfoByHtml(webRoomId, opts);
   } else if (api === "mobile") {
-    data = await getRoomInfoByMobile(opts.uid as string, opts);
+    data = await getRoomInfoByMobile(opts.uid as string, webRoomId, opts);
   } else if (api === "userHTML") {
     data = await getRoomInfoByUserWeb(opts.uid as string, opts);
   } else {

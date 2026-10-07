@@ -85,6 +85,11 @@ export async function getStream(
     if (opts.api === "userHTML") {
       api = "userHTML";
     }
+    // 如果用户指定了random，则在 mobile / userHTML 里随机选一个
+    // 注意 selectRandomAPI 的参数是"排除列表"，所以这里排除 web 和 webHTML
+    if (opts.api === "random") {
+      api = selectRandomAPI(["web", "webHTML"]);
+    }
   }
   const info = await getRoomInfo(opts.channelId, {
     doubleScreen: opts.doubleScreen ?? true,
