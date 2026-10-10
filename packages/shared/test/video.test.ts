@@ -834,9 +834,10 @@ describe.concurrent("genMergeAssMp4Command", () => {
           "/path/to/video.mp4",
           "-y",
           "-filter_complex",
-          "[0:v]scale_cuda=1080:1920[0:video];[0:video]hwdownload[2:video];[2:video]format=nv12[3:video];[3:video]subtitles=subtitle.ass[1:video];[1:video]hwupload_cuda[4:video]",
+          // 链尾不再补 hwupload：源中途变分辨率时，GPU 上传之后插入的 auto_scale 无法处理显存帧
+          "[0:v]scale_cuda=1080:1920[0:video];[0:video]hwdownload[2:video];[2:video]format=nv12[3:video];[3:video]subtitles=subtitle.ass[1:video]",
           "-map",
-          "[4:video]",
+          "[1:video]",
           "-map",
           "0:a",
           "-c:v",
@@ -955,7 +956,7 @@ describe.concurrent("genMergeAssMp4Command", () => {
         const command = await genMergeAssMp4Command(files, ffmpegOptions);
         const args = command._getArguments();
 
-        // 显式链路改造：before 模式硬件缩放解锁，scale_qsv 在显存内完成，回内存跑弹幕后传回
+        // 显式链路改造：before 模式硬件缩放解锁，scale_qsv 在显存内完成，回内存跑弹幕后直接交编码器
         expect(args).toEqual([
           "-hwaccel",
           "qsv",
@@ -965,9 +966,10 @@ describe.concurrent("genMergeAssMp4Command", () => {
           "/path/to/video.mp4",
           "-y",
           "-filter_complex",
-          "[0:v]scale_qsv=1080:1920[0:video];[0:video]hwdownload[2:video];[2:video]format=nv12[3:video];[3:video]subtitles=subtitle.ass[1:video];[1:video]hwupload=extra_hw_frames=64[4:video]",
+          // 链尾不再补 hwupload：源中途变分辨率时，GPU 上传之后插入的 auto_scale 无法处理显存帧
+          "[0:v]scale_qsv=1080:1920[0:video];[0:video]hwdownload[2:video];[2:video]format=nv12[3:video];[3:video]subtitles=subtitle.ass[1:video]",
           "-map",
-          "[4:video]",
+          "[1:video]",
           "-map",
           "0:a",
           "-c:v",

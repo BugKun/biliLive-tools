@@ -65,7 +65,7 @@ afterAll(async () => {
 });
 
 describe("genMergeAssMp4Command 硬件解码显式链路", () => {
-  it("CPU 滤镜链（弹幕+时间戳）+ nvenc 硬解：保留 -hwaccel 并自动补 hwdownload/hwupload", async () => {
+  it("CPU 滤镜链（弹幕+时间戳）+ nvenc 硬解：保留 -hwaccel 并自动补 hwdownload，链尾不回传显存", async () => {
     const command = await genMergeAssMp4Command(
       {
         videoFilePath: "input.mp4",
@@ -92,19 +92,19 @@ describe("genMergeAssMp4Command 硬件解码显式链路", () => {
     expect(filter).toContain("format=nv12");
     expect(filter).toContain("subtitles=");
     expect(filter).toContain("drawtext=");
-    expect(filter).toContain("hwupload_cuda");
-    // 顺序：下载在前、CPU 滤镜居中、上传在尾
+    // 链尾刻意不补 hwupload：源中途变分辨率时 ffmpeg 会在 GPU 上传之后插入 CPU 的 auto_scale_0，
+    // 显存帧喂不进去（Impossible to convert ... 'auto_scale_0'），整条压制失败
+    expect(filter).not.toContain("hwupload");
+    // 顺序：下载在前、CPU 滤镜居中
     const downloadIdx = filter.indexOf("hwdownload");
     const subtitlesIdx = filter.indexOf("subtitles=");
     const drawtextIdx = filter.indexOf("drawtext=");
-    const uploadIdx = filter.indexOf("hwupload_cuda");
     expect(downloadIdx).toBeGreaterThan(-1);
     expect(downloadIdx).toBeLessThan(subtitlesIdx);
     expect(subtitlesIdx).toBeLessThan(drawtextIdx);
-    expect(drawtextIdx).toBeLessThan(uploadIdx);
   });
 
-  it("CPU 滤镜链 + qsv 硬解：-hwaccel qsv + hwupload=extra_hw_frames=64", async () => {
+  it("CPU 滤镜链 + qsv 硬解：-hwaccel qsv，回内存跑滤镜后不再补 hwupload", async () => {
     const command = await genMergeAssMp4Command(
       {
         videoFilePath: "input.mp4",
@@ -126,7 +126,8 @@ describe("genMergeAssMp4Command 硬件解码显式链路", () => {
     const filter = getFilterValue(args);
     expect(filter).toContain("hwdownload");
     expect(filter).toContain("format=nv12");
-    expect(filter).toContain("hwupload=extra_hw_frames=64");
+    expect(filter).toContain("subtitles=");
+    expect(filter).not.toContain("hwupload");
   });
 
   it("无滤镜纯转码 + 硬解：零拷贝，不生成滤镜链", async () => {
@@ -175,7 +176,7 @@ describe("genMergeAssMp4Command 硬件解码显式链路", () => {
     expect(filter).not.toContain("hwupload");
   });
 
-  it("硬件缩放(before) + 弹幕 + 硬解：scale_cuda 直通，缩放后回内存、链尾回显存", async () => {
+  it("硬件缩放(before) + 弹幕 + 硬解：scale_cuda 直通，缩放后回内存直接交编码器", async () => {
     const command = await genMergeAssMp4Command(
       {
         videoFilePath: "input.mp4",
@@ -202,14 +203,14 @@ describe("genMergeAssMp4Command 硬件解码显式链路", () => {
     // 首滤镜被改写为 scale_cuda（去掉 hwupload，解码帧已在显存）
     expect(filter.startsWith("[0:v]scale_cuda")).toBe(true);
     expect(filter).not.toContain("hwupload_cuda,scale_cuda");
-    // 缩放后下载回内存跑 CPU 滤镜，链尾回传显存
+    // 缩放后下载回内存跑 CPU 滤镜后直接输出内存帧，
+    // 不再回传显存（否则源中途变分辨率时滤镜图重建会失败）
+    expect(filter).not.toContain("hwupload");
     const scaleIdx = filter.indexOf("scale_cuda");
     const downloadIdx = filter.indexOf("hwdownload");
     const subtitlesIdx = filter.indexOf("subtitles=");
-    const uploadIdx = filter.indexOf("hwupload_cuda");
     expect(scaleIdx).toBeLessThan(downloadIdx);
     expect(downloadIdx).toBeLessThan(subtitlesIdx);
-    expect(subtitlesIdx).toBeLessThan(uploadIdx);
   });
 
   it("显式指定字体文件：subtitles 注入 force_style(fontName)+fontsdir，drawtext 注入 fontfile", async () => {
@@ -309,4 +310,46 @@ describe("genMergeAssMp4Command 硬件解码显式链路", () => {
     expect(filter).not.toContain("fontsdir=");
     expect(filter).not.toContain("force_style=");
   });
+});
+
+describe("滤镜链尾不再补 hwupload（回归）", () => {
+  // 直播录制中途改变分辨率（推流换档、断点续录拼接）时 ffmpeg 会重建滤镜图。
+  // 若链尾挂着 hwupload_cuda/hwupload，ffmpeg 会在「GPU 上传之后」插入仅支持内存帧的
+  // auto_scale_0 做格式/尺寸协商，导致：
+  //   Impossible to convert between the formats supported by the filter 'Parsed_hwupload_cuda_4' and the filter 'auto_scale_0'
+  // 因此 CPU 滤镜跑完后直接输出内存帧，由硬件编码器内部接管上传
+  const cases = [
+    { name: "nvenc", encoder: "hevc_nvenc", bitrateControl: "CQ" },
+    { name: "qsv", encoder: "hevc_qsv", bitrateControl: "ICQ" },
+  ] as const;
+
+  for (const c of cases) {
+    it(`CPU 滤镜链 + ${c.name} 硬解：链尾输出内存帧，不带 hwupload`, async () => {
+      const command = await genMergeAssMp4Command(
+        {
+          videoFilePath: "input.mp4",
+          assFilePath: "danmu.ass",
+          outputPath: "output.mp4",
+          hotProgressFilePath: undefined,
+        },
+        {
+          encoder: c.encoder,
+          bitrateControl: c.bitrateControl,
+          crf: 28,
+          audioCodec: "copy",
+          decode: true,
+        },
+      );
+      const filter = getFilterValue(getArgs(command));
+      // 硬件解码保留，仍走 hwdownload + format 回内存
+      expect(filter).toContain("hwdownload");
+      expect(filter).toContain("format=nv12");
+      expect(filter).toContain("subtitles=");
+      // 关键：链尾不再有任何回传显存的滤镜
+      expect(filter).not.toContain("hwupload");
+      // 最后一个滤镜是 CPU 滤镜，输出流标签直接交给编码器
+      const lastFilter = filter.split(";").filter(Boolean).at(-1) ?? "";
+      expect(lastFilter).toContain("subtitles=");
+    });
+  }
 });

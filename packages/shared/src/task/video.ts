@@ -650,7 +650,7 @@ export class ComplexFilter {
   // 硬件解码后帧常驻显存，而弹幕/字幕/时间戳等 CPU 滤镜（libass/drawtext 只能跑 CPU）
   // 必须在内存帧上运行。以下方法在 CPU/显存边界自动补传输滤镜：
   //   显存→内存：hwdownload + format（nv12 或 p010le，由源像素格式决定是否保 10bit）
-  //   内存→显存：hwupload（交硬件编码器零拷贝编码）
+  //   内存→显存：不再补 hwupload，直接把内存帧交给硬件编码器（原因见下方说明）
 
   /** 在指定滤镜之后插入显存帧下载对（hwdownload + format），并改写后续滤镜的输入流 */
   private insertPairAfter(index: number, downloadFormat: HwDownloadFormat = "nv12") {
@@ -703,22 +703,15 @@ export class ComplexFilter {
     }
   }
 
-  /** 链尾追加显存帧上传（回显存交硬件编码器）。链尾已是显存内滤镜时无需上传 */
-  appendHwUpload(uploadFilter: "hwupload_cuda" | "hwupload", options = "") {
-    const last = this.filters[this.filters.length - 1];
-    if (!last) return;
-    if (HW_SCALE_FILTERS.includes(last.filter)) {
-      return;
-    }
-    const s = this.getNextStream();
-    this.filters.push({
-      filter: uploadFilter,
-      options,
-      inputs: [this.latestOutputStream],
-      outputs: s,
-    });
-    this.latestOutputStream = s;
-  }
+  // 注意：这里刻意**不在链尾补 hwupload 把帧传回显存**。
+  // 一旦 hwupload_cuda/hwupload 成为滤镜链最后一个滤镜，源视频中途改变分辨率
+  // （直播推流换分辨率、断点续录拼接都很常见）时 ffmpeg 会重建滤镜图，
+  // 并在「GPU 上传之后」插入 CPU 缩放：
+  //   auto-inserting filter 'auto_scale_0' between the filter 'Parsed_hwupload_cuda_4' and the filter 'scaler_out_0_0'
+  //   Impossible to convert between the formats supported by the filter 'Parsed_hwupload_cuda_4' and the filter 'auto_scale_0'
+  // 显存帧无法喂给仅支持内存的 scale，滤镜图重建失败，整条压制中止。
+  // 让滤镜链直接输出内存帧，由硬件编码器内部的上传环节接管，
+  // 规避了这条必现的失败路径，且实测输出与「显式 hwupload」逐像素一致（PSNR=inf）、耗时略低。
 
   getFilters() {
     return this.filters;
@@ -1316,8 +1309,10 @@ export const genMergeAssMp4Command = async (
   // 原有零拷贝行为保留：无滤镜、或链上仅有显存内缩放时帧全程显存。
   // 新增：开启解码加速（ffmpegOptions.decode）时，存在 CPU 滤镜（弹幕/字幕/时间戳，
   // libass/drawtext 只能跑 CPU）不再移除硬件解码，改为显式链路——解码帧常驻显存，
-  // 在 CPU/显存边界自动补传输滤镜：hwdownload + format 回内存跑 CPU 滤镜（10bit 源保位深），
-  // 处理完 hwupload 传回显存，交硬件编码器零拷贝编码
+  // 在 CPU/显存边界自动补传输滤镜：hwdownload + format 回内存跑 CPU 滤镜（10bit 源保位深）。
+  // 走完 CPU 滤镜后链尾保持内存帧，由硬件编码器内部的上传环节接管，
+  // 不再显式补 hwupload（原因见 ComplexFilter 中的说明：中途变分辨率会导致滤镜图重建失败）
+  // 此时仍有硬件参与：解码走 NVDEC/QSV，编码走 NVENC/QSV，只是省掉了最后一次显式上传
   const filters = complexFilter.getFilters();
   if (filters.length) {
     const first = filters[0];
@@ -1327,10 +1322,10 @@ export const genMergeAssMp4Command = async (
       command.inputOptions("-hwaccel_output_format cuda");
       first.filter = "scale_cuda";
       if (filters.length > 1) {
-        // 缩放后还有滤镜：缩放输出回内存跑 CPU 滤镜，链尾传回显存
+        // 缩放后还有滤镜：缩放输出回内存跑 CPU 滤镜，链尾不再传回显存
+        // （见 ComplexFilter 中关于不在链尾补 hwupload 的说明）
         const downloadFormat = selectHwDownloadFormat(await getSourcePixFmt());
         complexFilter.insertHwDownloadAfterHwScales(downloadFormat);
-        complexFilter.appendHwUpload("hwupload_cuda");
       }
     } else if (first.filter === "hwupload,scale_qsv") {
       if (ffmpegOptions.decode) {
@@ -1344,9 +1339,10 @@ export const genMergeAssMp4Command = async (
         command.inputOptions("-filter_hw_device hw");
       }
       if (filters.length > 1) {
+        // 缩放后还有滤镜：缩放输出回内存跑 CPU 滤镜，链尾不再传回显存
+        // （见 ComplexFilter 中关于不在链尾补 hwupload 的说明）
         const downloadFormat = selectHwDownloadFormat(await getSourcePixFmt());
         complexFilter.insertHwDownloadAfterHwScales(downloadFormat);
-        complexFilter.appendHwUpload("hwupload", "extra_hw_frames=64");
       }
     } else if (first.filter === "vpp_amf") {
       command.inputOptions("-hwaccel amf");
@@ -1364,14 +1360,12 @@ export const genMergeAssMp4Command = async (
         const downloadFormat = selectHwDownloadFormat(await getSourcePixFmt());
         complexFilter.prependHwDownload(downloadFormat);
         complexFilter.insertHwDownloadAfterHwScales(downloadFormat);
-        complexFilter.appendHwUpload("hwupload_cuda");
       } else if (hardware === "qsv") {
         command.inputOptions("-hwaccel qsv");
         command.inputOptions("-hwaccel_output_format qsv");
         const downloadFormat = selectHwDownloadFormat(await getSourcePixFmt());
         complexFilter.prependHwDownload(downloadFormat);
         complexFilter.insertHwDownloadAfterHwScales(downloadFormat);
-        complexFilter.appendHwUpload("hwupload", "extra_hw_frames=64");
       }
       // amf/videotoolbox 暂不支持滤镜链下的硬件解码，维持软解
     }
