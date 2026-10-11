@@ -86,18 +86,46 @@ export async function getStream(
       api = "userHTML";
     }
   }
-  const info = await getRoomInfo(opts.channelId, {
+  const roomInfoOpts = {
     doubleScreen: opts.doubleScreen ?? true,
     auth: opts.auth,
-    api: api,
     uid: opts.uid,
-  });
+  };
+
+  let info: Awaited<ReturnType<typeof getRoomInfo>> | undefined;
+  if (!opts.isLiveRadio) {
+    info = await getRoomInfo(opts.channelId, { ...roomInfoOpts, api });
+  } else {
+    // 电台的流只有 mobile / userHTML 会给，web / webHTML 对电台固定返回空数组。
+    // 这里不用均衡负载：先按上面选中的接口取一次，报错或者没拿到流就用另一个接口再试一次
+    const apis: RealAPIType[] = ["userHTML", "mobile"];
+    let firstError: Error | null = null;
+    for (const a of apis) {
+      try {
+        const res = await getRoomInfo(opts.channelId, { ...roomInfoOpts, api: a });
+        if (res.living && res.sources?.[0]) {
+          info = res;
+          break;
+        }
+        if (!firstError) firstError = new Error(`[DouYin-${a}] 未返回可用的流`);
+      } catch (e) {
+        if (!firstError) firstError = e as Error;
+      }
+    }
+    if (!info) throw firstError ?? new Error("未找到对应的流：接口没有返回任何流信息");
+  }
+
   if (!info.living) {
     throw new Error("It must be called getStream when living");
   }
 
   // 抖音为自动cdn，所以指定选择第一个
-  const sources = info.sources[0];
+  const sources = info.sources?.[0];
+  if (!sources) {
+    // 之前直接取 info.sources[0]，接口没给流时会抛
+    // TypeError: Cannot read properties of undefined (reading 'streams')，看不出真实原因
+    throw new Error("未找到对应的流：接口没有返回任何流信息");
+  }
   const formatPriorities = getFormatPriorities(
     opts.formatPriorities || ["flv", "hls"],
     opts.preferAlternativeStream,
