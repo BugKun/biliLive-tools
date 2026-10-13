@@ -198,6 +198,9 @@ export interface Recorder<E extends AnyObject = UnknownObject>
       DebugLog: DebugLog;
       // 检测到充电直播(付费/DRM 加密直播)
       ChargeLive: { channelId: string };
+      // 抖音 sec_uid 自愈：添加录制器时主播未开播会导致 uid(sec_uid) 为空，
+      // 开播后运行时检测到新的 sec_uid 时触发，由上层负责持久化
+      uidUpdated: string;
     }>,
     RecorderCreateOpts<E> {
   // 这里 id 设计成 string 而不是 string | number，主要是为了方便调用方少做一些类型处理，

@@ -56,6 +56,22 @@ export async function getInfo(
   };
 }
 
+/**
+ * 电台直播获取流时的接口尝试顺序。
+ * 电台的流只有 mobile / userHTML 会返回，web / webHTML 固定返回空数组。
+ * 用户显式配置了 mobile / userHTML 时，以其为第一优先，另一个接口兜底；
+ * random 随机打乱；其余情况（web / webHTML / balance / 未配置）默认 userHTML 优先：
+ * 大部分电台直播间 userHTML 都能返回数据，而 mobile 接口风控最严格，能少调就少调。
+ */
+function getRadioApiOrder(api: APIType | undefined): RealAPIType[] {
+  if (api === "userHTML") return ["userHTML", "mobile"];
+  if (api === "mobile") return ["mobile", "userHTML"];
+  if (api === "random") {
+    return Math.random() < 0.5 ? ["mobile", "userHTML"] : ["userHTML", "mobile"];
+  }
+  return ["userHTML", "mobile"];
+}
+
 export async function getStream(
   opts: Pick<Recorder, "channelId" | "quality" | "streamPriorities" | "sourcePriorities"> & {
     rejectCache?: boolean;
@@ -78,14 +94,6 @@ export async function getStream(
   } else if (api === "random") {
     api = selectRandomAPI(["userHTML", "webHTML"]);
   }
-  if (opts.isLiveRadio) {
-    // 直播电台可能需要特殊处理，优先使用 mobile 接口，某些直播间userHTML不会有数据,mobile可能更加合适
-    api = "mobile";
-    // 如果用户指定了userHTML接口，那么优先使用userHTML接口获取流信息
-    if (opts.api === "userHTML") {
-      api = "userHTML";
-    }
-  }
   const roomInfoOpts = {
     doubleScreen: opts.doubleScreen ?? true,
     auth: opts.auth,
@@ -97,9 +105,11 @@ export async function getStream(
     info = await getRoomInfo(opts.channelId, { ...roomInfoOpts, api });
   } else {
     // 电台的流只有 mobile / userHTML 会给，web / webHTML 对电台固定返回空数组。
-    // 这里不用均衡负载：先按上面选中的接口取一次，报错或者没拿到流就用另一个接口再试一次
-    const apis: RealAPIType[] = ["userHTML", "mobile"];
-    let firstError: Error | null = null;
+    // 按用户配置的顺序依次尝试，全部失败时聚合所有失败原因抛出：
+    // 之前只记录第一个接口（userHTML）的错误，mobile 的真实失败原因会被吞掉，
+    // 出现"配了 mobile 却报 userHTML 的错"这种误导性报错
+    const apis = getRadioApiOrder(opts.api);
+    const errors: string[] = [];
     for (const a of apis) {
       try {
         const res = await getRoomInfo(opts.channelId, { ...roomInfoOpts, api: a });
@@ -107,12 +117,16 @@ export async function getStream(
           info = res;
           break;
         }
-        if (!firstError) firstError = new Error(`[DouYin-${a}] 未返回可用的流`);
+        // res.api 是真实执行的接口：uid 缺失时会被降级为 web，
+        // 用请求的 a 会张冠李戴，用 res.api 才能反映真实原因
+        errors.push(`[DouYin-${res.api}] 未返回可用的流`);
       } catch (e) {
-        if (!firstError) firstError = e as Error;
+        errors.push(`[DouYin-${a}] ${e instanceof Error ? e.message : String(e)}`);
       }
     }
-    if (!info) throw firstError ?? new Error("未找到对应的流：接口没有返回任何流信息");
+    if (!info) {
+      throw new Error(`未找到对应的流：${errors.join("; ")}`);
+    }
   }
 
   if (!info.living) {

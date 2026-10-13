@@ -58,6 +58,12 @@ function createRecorder(opts: RecorderCreateOpts): Recorder {
         auth: this.auth,
         uid: this.uid,
       });
+      // sec_uid 自愈：添加录制器时主播可能未开播，导致 uid(sec_uid) 为空，
+      // 开播后检测接口会返回 sec_uid，此时热更新，保证 mobile/userHTML 接口可用
+      if (info.uid && info.uid !== this.uid) {
+        this.uid = info.uid;
+        this.emit("uidUpdated", info.uid);
+      }
       return {
         channelId,
         ...info,
@@ -133,6 +139,12 @@ const checkLiveStatusAndRecord: Recorder["checkLiveStatusAndRecord"] = async fun
       uid: this.uid,
     });
     this.liveInfo = liveInfo;
+    // sec_uid 自愈：添加录制器时主播可能未开播，导致 uid(sec_uid) 存不上，
+    // 开播后 getInfo 会返回 sec_uid，此时热更新，后续 getStream 的 mobile/userHTML 接口即可用
+    if (liveInfo.uid && liveInfo.uid !== this.uid) {
+      this.uid = liveInfo.uid;
+      this.emit("uidUpdated", liveInfo.uid);
+    }
     isLiveRadio = liveInfo.isLiveRadio;
     this.emit("stateChange", { state: "idle" });
   } catch (error) {

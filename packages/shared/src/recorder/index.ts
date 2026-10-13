@@ -718,12 +718,24 @@ export async function createRecorderManager(appConfig: AppConfig) {
   });
 
   const recorderConfig = new RecorderConfig(appConfig);
+  // sec_uid 自愈落盘：抖音录制器添加时若主播未开播，uid(sec_uid) 存不上，
+  // 开播后 recorder 会热更新 this.uid 并触发 uidUpdated 事件，这里负责持久化。
+  // 幂等：仅当配置中的 uid 与最新值不同时才写盘，避免每轮检测都触发配置写入
+  const attachUidPersist = (recorder: Recorder) => {
+    recorder.on("uidUpdated", (uid: string) => {
+      const raw = recorderConfig.getRaw(recorder.id);
+      if (!raw || raw.uid === uid) return;
+      recorderConfig.update({ ...raw, uid });
+      logger.info(`recorder uid updated: ${recorder.channelId} -> ${uid}`);
+    });
+  };
   for (const recorder of recorderConfig.list()) {
     try {
-      manager.addRecorder({
+      const created = manager.addRecorder({
         ...recorder,
         m3u8ProxyUrl: `http://127.0.0.1:${config.port}/bili/stream`,
       });
+      attachUidPersist(created);
     } catch (error) {
       logger.error("Add recorder error", { recorder, error });
       continue;
@@ -771,6 +783,7 @@ export async function createRecorderManager(appConfig: AppConfig) {
         ...data,
         m3u8ProxyUrl: `http://127.0.0.1:${config.port}/bili/stream`,
       });
+      attachUidPersist(recoder);
 
       if (!data.disableAutoCheck) {
         manager.startRecord(recoder.id, {

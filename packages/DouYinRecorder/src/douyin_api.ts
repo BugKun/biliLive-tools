@@ -180,6 +180,8 @@ async function getRoomInfoByUserWeb(
     throw new Error("userHTML页面没有正常加载" + String(res.data));
   }
   if (!res.data.includes("直播中")) {
+    // 注意：这里不能返回 room: null，getRoomInfo 里会对 room 做 assert，
+    // 返回 null 会让"未开播"变成抛异常，状态检测就炸了
     return {
       living: false,
       isLiveRadio: false,
@@ -187,7 +189,12 @@ async function getRoomInfoByUserWeb(
       sec_uid: "",
       avatar: "",
       api: "userHTML",
-      room: null,
+      room: {
+        title: "",
+        cover: "",
+        id_str: "",
+        stream_url: null,
+      },
     };
   }
 
@@ -517,6 +524,11 @@ export async function getRoomInfo(
   if (api === "mobile" || api === "userHTML") {
     // mobile 接口需要 sec_uid 参数，老数据可能没有，实现兼容
     if (!opts.uid || typeof opts.uid !== "string") {
+      // 降级会改变实际执行的接口，必须留下日志，否则排查时只能看到 web 的空数据，
+      // 看不出 mobile/userHTML 被静默降级
+      console.warn(
+        `[DouYin] ${api} 接口需要 sec_uid(uid) 参数，当前为空或类型不正确，已降级为 web 接口，roomId: ${webRoomId}`,
+      );
       api = "web";
     }
   }
