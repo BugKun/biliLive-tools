@@ -10,8 +10,6 @@ jobs:
   release:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    env:
-      is_tag: ${{ startsWith(github.ref, 'refs/tags/') }}
 
     strategy:
       matrix:
@@ -38,39 +36,13 @@ jobs:
       - name: build
         run: pnpm run build:webui
 
-      - name: Deploy to webui branch
-        if: env.is_tag == 'true'
-        env:
-          REPO: https://github.com/renmu123/biliLive-webui
-          BRANCH: webui
-          GH_PAT: ${{ secrets.WEBUI_TOKEN }}
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "github-actions@github.com"
-          cd packages/app/out/renderer
-          git init
-          git remote add origin https://x-access-token:${GH_PAT}@github.com/renmu123/biliLive-webui.git
-          git checkout -b $BRANCH
-          git add .
-          git commit -m "Deploy compiled files"
-          git push --force origin $BRANCH
-
-      - name: Deploy to test branch
-        if: env.is_tag == 'false'
-        env:
-          REPO: https://github.com/renmu123/biliLive-webui
-          BRANCH: test
-          GH_PAT: ${{ secrets.WEBUI_TOKEN }}
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "github-actions@github.com"
-          cd packages/app/out/renderer
-          git init
-          git remote add origin https://x-access-token:${GH_PAT}@github.com/renmu123/biliLive-webui.git
-          git checkout -b $BRANCH
-          git add .
-          git commit -m "Deploy compiled files"
-          git push --force origin $BRANCH
+      - name: Upload build artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webui-build
+          path: packages/app/out/renderer
+          retention-days: 7
 
 permissions:
-  contents: write
+  contents: read
