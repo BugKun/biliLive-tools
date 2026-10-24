@@ -60,6 +60,7 @@ export const recorderNoGlobalFollowFields: Array<
   "disableProvideCommentsWhenRecording",
   "saveGiftDanma",
   "saveSCDanma",
+  "saveDanmaStats2DB",
   "segment",
   "uid",
   "saveCover",
@@ -105,6 +106,8 @@ export type CommonRoomConfig = {
   title: string;
   uploadPresetId?: string;
   danmu: boolean;
+  /** 弹幕为空或不存在时仍进行压制 */
+  burnWithoutDanmu?: boolean;
   ffmpegPreset?: string | null;
   danmuPreset?: string | null;
   autoPartMerge: boolean;
@@ -494,6 +497,8 @@ export interface GlobalRecorder {
   recorderType: "auto" | "ffmpeg" | "mesio" | "bililive";
   /** 保存弹幕测试 */
   saveDanma2DB: boolean;
+  /** 将弹幕统计保存到数据库 */
+  saveDanmaStats2DB: boolean;
   /** B站特有的配置 */
   bilibili: BilibiliRecorderConfig;
   /** 斗鱼特有的配置 */
@@ -557,6 +562,8 @@ export interface Recorder {
   convert2Mp4?: boolean;
   /** 视频格式 */
   videoFormat: GlobalRecorder["videoFormat"];
+  /** 将弹幕统计保存到数据库 */
+  saveDanmaStats2DB?: GlobalRecorder["saveDanmaStats2DB"];
   /** 录制器类型 */
   recorderType: GlobalRecorder["recorderType"];
   qualityRetry: GlobalRecorder["qualityRetry"];
@@ -1113,6 +1120,8 @@ export interface BiliupConfig {
   selectiionReply?: 0 | 1;
   /** 合集id */
   seasonId?: number | null;
+  /** 合集中稿件的标题模板，默认 {{mediaTitle}}（视频标题） */
+  seasonTitleTemplate?: string;
   /** 小节id */
   sectionId?: number;
   /** 创建该预设的uid */

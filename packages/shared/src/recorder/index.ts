@@ -542,7 +542,7 @@ export async function createRecorderManager(appConfig: AppConfig) {
         },
       );
 
-      if (stats) {
+      if (data?.saveDanmaStats2DB && stats) {
         recordHistory.upadteLive(
           {
             video_file: filename,
@@ -551,6 +551,7 @@ export async function createRecorderManager(appConfig: AppConfig) {
           {
             danma_num: stats.danmaNum,
             interact_num: stats.uniqMember,
+            danma_stats_json: JSON.stringify(stats.danmaStats),
           },
         );
       } else if (xmlFile && (await fs.pathExists(xmlFile))) {
@@ -709,7 +710,9 @@ export async function createRecorderManager(appConfig: AppConfig) {
     }
   });
 
-  appConfig.on("update", () => {
+  appConfig.on("update", (_newVal, _oldVal, key) => {
+    // @ts-ignore
+    if (["tool", "recorders"].includes(key)) return;
     const { ffmpegPath, mesioPath, bililiveRecorderPath } = getBinPath();
     setFFMPEGPath(ffmpegPath);
     setMesioPath(mesioPath);
@@ -765,12 +768,12 @@ export async function createRecorderManager(appConfig: AppConfig) {
     manager,
     config: recorderConfig,
     addRecorder: async (recorder: RecorderConfigType) => {
-      const recorders = recorderConfig.list();
+      const recorders = appConfig.get("recorders");
       if (
-        recorders.findIndex(
+        recorders.some(
           (item) =>
             item.channelId === recorder.channelId && item.providerId === recorder.providerId,
-        ) !== -1
+        )
       ) {
         return null;
       }

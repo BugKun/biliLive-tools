@@ -48,11 +48,11 @@ describe("Config", () => {
 
     config.set("count", 2);
     expect(config.get("count")).toBe(2);
-    expect(onUpdate).toHaveBeenNthCalledWith(1, { count: 2 }, { count: 1 });
+    expect(onUpdate).toHaveBeenNthCalledWith(1, { count: 2 }, { count: 1 }, "count");
     expect(JSON.parse(fs.readFileSync(configPath, "utf-8"))).toEqual({ count: 2 });
 
     config.setAll({ enabled: true });
-    expect(onUpdate).toHaveBeenNthCalledWith(2, { enabled: true }, { count: 2 });
+    expect(onUpdate).toHaveBeenNthCalledWith(2, { enabled: true }, { count: 2 }, null);
     expect(JSON.parse(fs.readFileSync(configPath, "utf-8"))).toEqual({ enabled: true });
 
     config.clear();
@@ -89,7 +89,8 @@ describe("Config", () => {
         nested: {
           value: 1,
         },
-      }
+      },
+      "nested.value",
     );
     expect(onUpdate).toHaveBeenNthCalledWith(
       2,
@@ -105,7 +106,8 @@ describe("Config", () => {
         nested: {
           value: 2,
         },
-      }
+      },
+      "nested.extra.label",
     );
     expect(JSON.parse(fs.readFileSync(configPath, "utf-8"))).toEqual({
       nested: {
@@ -170,6 +172,7 @@ describe("AppConfig", () => {
 
     expect(config.get("host")).toBe("0.0.0.0");
     expect(config.get("port")).toBe(18010);
+    expect(config.get("recorder.saveDanmaStats2DB")).toBe(false);
     expect(config.getDeep("tool.download.savePath")).toBe("D:/records");
     expect(config.getDeep("tool.download.override")).toBe(false);
 
@@ -177,6 +180,14 @@ describe("AppConfig", () => {
     expect(persisted.host).toBe("0.0.0.0");
     expect(persisted.tool.download.savePath).toBe("D:/records");
     expect(persisted.port).toBe(18010);
+  });
+
+  it.each([undefined, true, false])("已有配置的弹幕统计入库选项为 %s 时会正确合并", (enabled) => {
+    fs.writeFileSync(configPath, JSON.stringify({ recorder: { saveDanmaStats2DB: enabled } }));
+
+    const config = new AppConfig(configPath);
+
+    expect(config.get("recorder.saveDanmaStats2DB")).toBe(enabled ?? false);
   });
 
   it("支持通过点路径更新和读取嵌套配置", () => {
@@ -197,5 +208,63 @@ describe("AppConfig", () => {
 
     const persisted = JSON.parse(fs.readFileSync(configPath, "utf-8"));
     expect(persisted.tool.download.override).toBe(true);
+  });
+
+  it("withCache 为 true 时不读取文件，支持顶层字段和点路径", () => {
+    const config = new AppConfig();
+    config.init(configPath, { host: "cached-host" });
+    const read = vi.spyOn(config, "read");
+
+    const persisted = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    persisted.host = "disk-host";
+    persisted.tool.download.override = true;
+    fs.writeFileSync(configPath, JSON.stringify(persisted));
+
+    expect(config.get("host", true)).toBe("cached-host");
+    expect(config.get("tool.download.override", true)).toBe(false);
+    expect(config.get("tool.download.missing", true)).toBeUndefined();
+    expect(read).not.toHaveBeenCalled();
+
+    expect(config.get("tool.download.override", false)).toBe(true);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(config.get("host", true)).toBe("disk-host");
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["get", "getAll", "read"] as const)("%s 会读取外部修改并刷新缓存", (method) => {
+    const config = new AppConfig();
+    config.init(configPath, { host: "cached-host" });
+    const persisted = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    persisted.host = "disk-host";
+    fs.writeFileSync(configPath, JSON.stringify(persisted));
+
+    if (method === "get") {
+      expect(config.get("host")).toBe("disk-host");
+    } else {
+      expect(config[method]().host).toBe("disk-host");
+    }
+
+    expect(config.get("host", true)).toBe("disk-host");
+  });
+
+  it("写入配置后缓存立即更新，update 监听器也能读到新值", () => {
+    const config = new AppConfig();
+    config.init(configPath, { host: "initial-host" });
+    const updatedHosts: string[] = [];
+    config.on("update", () => updatedHosts.push(config.get("host", true)));
+
+    config.set("host", "updated-host");
+    expect(config.get("host", true)).toBe("updated-host");
+
+    config.set("tool.download.override", true);
+    expect(config.get("tool.download.override", true)).toBe(true);
+
+    config.setAll({ ...config.data, host: "replaced-host" });
+    expect(config.get("host", true)).toBe("replaced-host");
+    expect(updatedHosts).toEqual(["updated-host", "updated-host", "replaced-host"]);
+
+    config.clear();
+    expect(config.get("host", true)).toBeUndefined();
+    expect(JSON.parse(fs.readFileSync(configPath, "utf-8"))).toEqual({});
   });
 });
