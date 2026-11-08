@@ -133,6 +133,7 @@ export type UpdateRecorderArgs = Pick<
   | "weight"
   | "debugLevel"
   | "api"
+  | "cookieMode"
 >;
 export type UpdateRecorderResp = ClientRecorder;
 
@@ -222,6 +223,14 @@ export interface QueryStreamerDetailResp extends StreamerDetailResponse {
   recorderInfo: ClientRecorder | null;
 }
 
+export interface QueryRecordCalendarArgs {
+  recorderId: RecoderConfig["id"];
+  startTime: number;
+  endTime: number;
+}
+
+export type QueryRecordCalendarResp = number[];
+
 export interface BatchStartRecordArgs {
   ids: string[];
 }
@@ -301,6 +310,10 @@ export type RecorderAPI = {
   queryStreamerDetail: {
     Args: QueryStreamerDetailArgs;
     Resp: QueryStreamerDetailResp;
+  };
+  queryRecordCalendar: {
+    Args: QueryRecordCalendarArgs;
+    Resp: QueryRecordCalendarResp;
   };
   // getManager: {
   //   Args: GetManagerArgs;

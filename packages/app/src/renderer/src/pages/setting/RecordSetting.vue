@@ -225,6 +225,9 @@
               value-field="uid"
               clearable
             />
+            <n-button style="margin-left: 10px" @click="emit('login', 'bilibili')" type="primary"
+              >登录</n-button
+            >
           </n-form-item>
           <n-form-item>
             <template #label>
@@ -343,6 +346,25 @@
         <n-tab-pane class="tab-pane" name="douyu" tab="斗鱼" display-directive="show:lazy">
           <n-form-item>
             <template #label>
+              <Tip
+                text="账号"
+                tip="未选择账号时将以未登录状态请求斗鱼接口，请先在用户页登录斗鱼账号"
+              ></Tip>
+            </template>
+            <n-select
+              v-model:value="config.recorder.douyu.uid"
+              :options="douyuUserList"
+              label-field="name"
+              value-field="uid"
+              clearable
+              placeholder="请先在用户页登录斗鱼账号"
+            />
+            <n-button style="margin-left: 10px" @click="emit('login', 'douyu')" type="primary"
+              >登录</n-button
+            >
+          </n-form-item>
+          <n-form-item>
+            <template #label>
               <Tip :text="textInfo.douyu.quality.text" :tip="textInfo.douyu.quality.tip"></Tip>
             </template>
             <n-select
@@ -369,22 +391,6 @@
             <n-select
               v-model:value="config.recorder.douyu.codecName"
               :options="douyuStreamCodecOptions"
-            />
-          </n-form-item>
-          <n-form-item>
-            <template #label>
-              <Tip
-                text="账号"
-                tip="未选择账号时将以未登录状态请求斗鱼接口，请先在用户页登录斗鱼账号"
-              ></Tip>
-            </template>
-            <n-select
-              v-model:value="config.recorder.douyu.uid"
-              :options="douyuUserList"
-              label-field="name"
-              value-field="uid"
-              clearable
-              placeholder="请先在用户页登录斗鱼账号"
             />
           </n-form-item>
 
@@ -562,6 +568,18 @@
               title="登录后退出即可获取cookie"
               >登录</n-button
             >
+          </n-form-item>
+          <n-form-item>
+            <template #label>
+              <Tip
+                :text="textInfo.douyin.cookieMode.text"
+                :tip="textInfo.douyin.cookieMode.tip"
+              ></Tip>
+            </template>
+            <n-select
+              v-model:value="config.recorder.douyin.cookieMode"
+              :options="douyinCookieModeOptions"
+            />
           </n-form-item>
           <n-form-item>
             <template #label>
@@ -822,6 +840,7 @@ import {
   recorderTypeOptions,
   recorderDebugLevelOptions,
   douyinApiTypeOptions,
+  douyinCookieModeOptions,
   huyaApiTypeOptions,
   douyuStreamCodecOptions,
   douyuApiTypeOptions,
@@ -834,6 +853,9 @@ import type { AppConfig } from "@biliLive-tools/types";
 const config = defineModel<AppConfig>("data", {
   default: () => {},
 });
+const emit = defineEmits<{
+  (event: "login", platform: "bilibili" | "douyu"): void;
+}>();
 const { isMobile } = useBreakpoints();
 const labelWidth = computed(() => {
   return isMobile.value ? "90px" : "145px";

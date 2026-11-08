@@ -232,6 +232,48 @@ router.get("/detail", async (ctx) => {
   };
 });
 
+router.get("/calendar", (ctx) => {
+  const recorderId = getSingleQueryValue(ctx.request.query.recorderId);
+  const startTime = Number(getSingleQueryValue(ctx.request.query.startTime));
+  const endTime = Number(getSingleQueryValue(ctx.request.query.endTime));
+
+  if (
+    !recorderId ||
+    !Number.isSafeInteger(startTime) ||
+    !Number.isSafeInteger(endTime) ||
+    startTime < 0 ||
+    endTime <= startTime ||
+    endTime - startTime > 32 * 24 * 60 * 60 * 1000
+  ) {
+    ctx.status = 400;
+    ctx.body = { message: "录制器和有效的月份时间范围不能为空" };
+    return;
+  }
+
+  let recorder: ReturnType<typeof recorderService.getRecorder>;
+  try {
+    recorder = recorderService.getRecorder({ id: recorderId });
+  } catch {
+    ctx.status = 404;
+    ctx.body = { message: "录制器不存在" };
+    return;
+  }
+  if (!recorder) {
+    ctx.status = 404;
+    ctx.body = { message: "录制器不存在" };
+    return;
+  }
+
+  ctx.body = {
+    payload: streamerDetailService.queryRecordStartTimes({
+      room_id: recorder.channelId,
+      platform: recorder.providerId,
+      startTime,
+      endTime,
+    }),
+  };
+});
+
 router.get("/ws/danma-test", async (ctx) => {
   ctx.status = 426;
   ctx.body = {
@@ -286,6 +328,7 @@ router.post("/add", async (ctx) => {
     "recorderType",
     "cookie",
     "doubleScreen",
+    "cookieMode",
     "onlyAudio",
     "useServerTimestamp",
     "handleTime",
@@ -358,6 +401,7 @@ router.put("/:id", (ctx) => {
     "recorderType",
     "cookie",
     "doubleScreen",
+    "cookieMode",
     "onlyAudio",
     "useServerTimestamp",
     "handleTime",
